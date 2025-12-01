@@ -1178,6 +1178,22 @@ def cmd_list_models(args):
 def cmd_interactive(args):
     """Interactive TUI for selecting and testing multiple models."""
     try:
+        # Load config if provided
+        config = None
+        if getattr(args, "config", None):
+            try:
+                config = load_config(args.config)
+                print(f"📄 Loaded configuration from {args.config}")
+                # Override args with config values if not explicitly set
+                if config.provider.endpoint and not args.endpoint:
+                    args.endpoint = config.provider.endpoint
+                if config.scoring.method != "keyword" and args.scorer == "keyword":
+                    args.scorer = config.scoring.method
+                if config.scoring.semantic_model and args.semantic_model == "Alibaba-NLP/gte-large-en-v1.5":
+                    args.semantic_model = config.scoring.semantic_model
+            except Exception as e:
+                print(f"⚠️  Warning: Failed to load config: {e}")
+
         # Create temporary client to list models
         api_key = getattr(args, "api_key", None)
         client = create_client(args.provider, args.endpoint, "temp", api_key)
@@ -1724,6 +1740,10 @@ Examples:
     parser_interactive.add_argument(
         "--api-key",
         help="API key for providers that require it (e.g., OpenRouter)",
+    )
+    parser_interactive.add_argument(
+        "--config",
+        help="Load configuration from YAML file",
     )
     parser_interactive.add_argument(
         "--export-csv",
