@@ -5,9 +5,12 @@ description = "Evaluate uncensored LLMs for offensive security tasks"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "httpx>=0.28.1",
     "pick>=2.4.0",
     "pytest>=9.0.1",
+    "pyyaml>=6.0",
     "requests>=2.32.5",
+    "tenacity>=9.1.2",
 ]
 
 [project.optional-dependencies]
