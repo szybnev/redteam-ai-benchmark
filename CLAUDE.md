@@ -583,6 +583,87 @@ export:
 optimization:
   enabled: true
   optimizer_model: llama3.3:70b
+
+langfuse:
+  secret_key: sk-lf-xxx
+  public_key: pk-lf-xxx
+  host: http://localhost:3000
 ```
 
 Usage: `uv run run_benchmark.py run ollama -m model --config config.yaml`
+
+## Langfuse Integration (Observability)
+
+The benchmark includes **optional integration with Langfuse** - an open-source LLM observability platform for tracing, debugging, and analyzing model interactions.
+
+### What is Langfuse?
+
+Langfuse provides:
+- **Distributed tracing** - Track each question through the benchmark pipeline
+- **Performance metrics** - Measure latency, token usage, and scores per question
+- **Optimization tracking** - Visualize prompt optimization iterations and strategies
+- **Multi-model comparison** - Compare different models side-by-side in the UI
+
+### Setup
+
+1. **Install Langfuse** (self-hosted or cloud):
+   ```bash
+   # Self-hosted with Docker
+   docker run -p 3000:3000 langfuse/langfuse
+   ```
+
+2. **Get API keys** from Langfuse UI (Settings → API Keys):
+   - `secret_key`: `sk-lf-...`
+   - `public_key`: `pk-lf-...`
+
+3. **Configure in `config.yaml`**:
+   ```yaml
+   langfuse:
+     secret_key: sk-lf-xxx
+     public_key: pk-lf-xxx
+     host: http://localhost:3000  # or https://cloud.langfuse.com
+   ```
+
+4. **Run benchmark with config**:
+   ```bash
+   uv run run_benchmark.py run ollama -m llama3.1:8b --config config.yaml
+   ```
+
+### What Gets Tracked
+
+**Benchmark trace structure**:
+```
+benchmark-{model}                    # Root trace
+├── Q1-AMSI_Bypass                   # Question span
+│   ├── input: original prompt
+│   ├── output: model response
+│   ├── metadata: {score, latency_ms}
+│   └── usage: {latency_ms}
+├── optimization-Q1                  # Optimization span (if triggered)
+│   ├── iter-1-role_playing         # Optimization attempt
+│   ├── iter-2-technical
+│   └── metadata: {success, iterations}
+└── metadata: {total_score, interpretation}
+```
+
+**Captured data**:
+- **Per-question metrics**: Score (0/50/100), latency, prompt/response
+- **Optimization history**: All strategies tested, iteration count, success rate
+- **Final results**: Total score, interpretation (production-ready/requires-validation/not-suitable)
+
+### Usage Notes
+
+- **Automatic activation**: Langfuse is enabled if `secret_key` and `public_key` are present in config
+- **Graceful fallback**: Benchmark continues if Langfuse is unavailable (shows warning)
+- **Performance impact**: Minimal (<50ms overhead per trace due to async background uploads)
+- **SDK version**: Uses Langfuse Python SDK v3 (OpenTelemetry-based)
+
+### Viewing Results
+
+1. Open Langfuse UI: `http://localhost:3000`
+2. Navigate to **Traces** → Filter by model name
+3. Click on trace to see:
+   - Full question/response pairs
+   - Score progression through optimization
+   - Latency breakdown per question
+   - Side-by-side comparison of different models
