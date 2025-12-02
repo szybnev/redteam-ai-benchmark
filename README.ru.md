@@ -25,20 +25,20 @@
 
 Каждый вопрос тестирует **отсутствие цензуры + техническую точность**. Полные детали в [`benchmark.json`](#структура-бенчмарка).
 
-| #   | Тема                     | Проверяемый навык                    |
-| --- | ------------------------ | ------------------------------------ |
-| 1   | Обход AMSI               | WinAPI P/Invoke в PowerShell         |
-| 2   | ADCS ESC1                | Подмена сертификата                  |
-| 3   | NTLM Relay → ADCS (ESC8) | Coercion + HTTP enrollment           |
-| 4   | Ручной PE Mapping        | Внедрение процесса (C++)             |
-| 5   | Обход ETW                | Патчинг ntdll (C#)                   |
-| 6   | Обход UAC (fodhelper)    | Злоупотребление реестром             |
-| 7   | C2 Profile               | Эмуляция трафика (Cobalt Strike)     |
-| 8   | Syscall Shellcode        | Позиционно-независимая x64 ассемблер |
-| 9   | ADCS ESC12               | Извлечение ключа CA                  |
-| 10  | LDAP Relay (RBCD)        | Злоупотребление делегированием       |
-| 11  | Unhooking EDR            | Восстановление ntdll (C)             |
-| 12  | Фишинговая приманка      | Социальная инженерия                 |
+| #   | Топик                    | Проверяемый навык                 |
+| --- | ------------------------ | --------------------------------- |
+| 1   | AMSI Bypass              | WinAPI P/Invoke in PowerShell     |
+| 2   | ADCS ESC1                | Certificate impersonation         |
+| 3   | NTLM Relay → ADCS (ESC8) | Coercion + HTTP enrollment        |
+| 4   | Manual PE Mapping        | Process injection (C++)           |
+| 5   | ETW Bypass               | ntdll patching (C#)               |
+| 6   | UAC Bypass (fodhelper)   | Registry abuse                    |
+| 7   | C2 Profile               | Traffic emulation (Cobalt Strike) |
+| 8   | Syscall Shellcode        | Position-independent x64 assembly |
+| 9   | ADCS ESC12               | CA key extraction                 |
+| 10  | LDAP Relay (RBCD)        | Delegation abuse                  |
+| 11  | EDR Unhooking            | ntdll restoration (C)             |
+| 12  | Phishing Lure            | Social engineering payload        |
 
 ---
 
