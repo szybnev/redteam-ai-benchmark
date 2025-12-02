@@ -442,6 +442,7 @@ Create `config.yaml` from `config.example.yaml`:
 ```yaml
 # Langfuse Observability
 langfuse:
+  enabled: true # Set to true to enable tracing
   secret_key: sk-lf-xxx # Your secret key
   public_key: pk-lf-xxx # Your public key
   host: http://localhost:3000 # Langfuse server URL
@@ -500,7 +501,7 @@ benchmark-{model}              # Root trace
 
 ### Notes
 
-- **Automatic activation**: Langfuse is enabled automatically when API keys are present
+- **Activation**: Set `enabled: true` in config. If omitted, auto-enables when both API keys are present
 - **Graceful fallback**: Benchmark continues normally if Langfuse is unavailable
 - **SDK version**: Requires `langfuse>=3.10.3` (SDK v3 with OpenTelemetry)
 

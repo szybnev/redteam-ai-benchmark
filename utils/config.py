@@ -59,6 +59,16 @@ class OptimizationConfig:
 
 
 @dataclass
+class LangfuseConfig:
+    """Configuration for Langfuse observability."""
+
+    enabled: bool = False
+    secret_key: Optional[str] = None
+    public_key: Optional[str] = None
+    host: str = "http://localhost:3000"
+
+
+@dataclass
 class BenchmarkConfig:
     """Main benchmark configuration."""
 
@@ -66,6 +76,7 @@ class BenchmarkConfig:
     scoring: ScoringConfig = field(default_factory=ScoringConfig)
     export: ExportConfig = field(default_factory=ExportConfig)
     optimization: OptimizationConfig = field(default_factory=OptimizationConfig)
+    langfuse: LangfuseConfig = field(default_factory=LangfuseConfig)
     questions_file: str = "benchmark.json"
     answers_file: str = "answers_all.txt"
     rate_limit_delay: float = 1.5
@@ -139,6 +150,20 @@ def _dict_to_optimization_config(data: Dict[str, Any]) -> OptimizationConfig:
     )
 
 
+def _dict_to_langfuse_config(data: Dict[str, Any]) -> LangfuseConfig:
+    """Convert dict to LangfuseConfig. Auto-enables if keys are present."""
+    secret_key = data.get("secret_key")
+    public_key = data.get("public_key")
+    # Auto-enable if both keys are present
+    auto_enabled = bool(secret_key and public_key)
+    return LangfuseConfig(
+        enabled=data.get("enabled", auto_enabled),
+        secret_key=secret_key,
+        public_key=public_key,
+        host=data.get("host", "http://localhost:3000"),
+    )
+
+
 def load_config(config_path: str) -> BenchmarkConfig:
     """
     Load configuration from YAML file.
@@ -183,12 +208,14 @@ def load_config(config_path: str) -> BenchmarkConfig:
     scoring = _dict_to_scoring_config(data.get("scoring", {}))
     export = _dict_to_export_config(data.get("export", {}))
     optimization = _dict_to_optimization_config(data.get("optimization", {}))
+    langfuse = _dict_to_langfuse_config(data.get("langfuse", {}))
 
     return BenchmarkConfig(
         provider=provider,
         scoring=scoring,
         export=export,
         optimization=optimization,
+        langfuse=langfuse,
         questions_file=data.get("questions_file", "benchmark.json"),
         answers_file=data.get("answers_file", "answers_all.txt"),
         rate_limit_delay=data.get("rate_limit_delay", 1.5),

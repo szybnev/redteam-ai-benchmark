@@ -1,11 +1,12 @@
 [project]
 name = "redteam-ai-benchmark"
-version = "1.0.0"
+version = "1.5.0"
 description = "Evaluate uncensored LLMs for offensive security tasks"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "httpx>=0.28.1",
+    "langfuse>=3.10.3",
     "pick>=2.4.0",
     "pytest>=9.0.1",
     "pyyaml>=6.0",
@@ -39,6 +40,9 @@ exclude = [
     ".mypy_cache",
     ".ruff_cache",
     "venv",
+    ".venv",
+    ".trunk",
+    ".pytest_cach",
     "__pycache__",
 ]
 

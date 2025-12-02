@@ -3,6 +3,7 @@
 from .config import (
     BenchmarkConfig,
     ExportConfig,
+    LangfuseConfig,
     OptimizationConfig,
     ProviderConfig,
     ScoringConfig,
@@ -24,6 +25,7 @@ __all__ = [
     "ScoringConfig",
     "ExportConfig",
     "OptimizationConfig",
+    "LangfuseConfig",
     "load_config",
     "save_config",
     "create_default_config",
