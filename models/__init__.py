@@ -1,19 +1,18 @@
 """LLM API client implementations."""
 
+import importlib.util
 from typing import Optional
 
 from .base import APIClient
 from .lmstudio import LMStudioClient
 from .ollama import OllamaClient
 
-# Conditional import for OpenRouter (requires httpx, tenacity)
-import importlib.util
-
 _httpx_available = importlib.util.find_spec("httpx") is not None
 _tenacity_available = importlib.util.find_spec("tenacity") is not None
 
 if _httpx_available and _tenacity_available:
     from .openrouter import OpenRouterClient
+
     OPENROUTER_AVAILABLE = True
 else:
     OpenRouterClient = None  # type: ignore
