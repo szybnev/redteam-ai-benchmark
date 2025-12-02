@@ -619,11 +619,11 @@ uv run run_benchmark.py run ollama -m llama3.1:8b \
 
 #### Model Selection
 
-| Model                 | Size  | Speed  | Quality | Use Case           |
-| --------------------- | ----- | ------ | ------- | ------------------ |
-| **all-MiniLM-L6-v2**  | 80MB  | Fast   | Good    | Default (balanced) |
-| **all-mpnet-base-v2** | 420MB | Slow   | Best    | Maximum accuracy   |
-| **gte-large-en-v1.5** | 120MB | Medium | Better  | Balanced upgrade   |
+| Model                 | Size   | Speed           | Quality  | Use Case                           |
+| --------------------- | ------ | --------------- | -------- | ---------------------------------- |
+| **all-MiniLM-L6-v2**  | 22 MB  | Very Fast       | Good     | Speed and efficiency               |
+| **all-mpnet-base-v2** | 420 MB | Medium          | Good     | Balance of quality and performance |
+| **gte-large-en-v1.5** | 1.7 GB | Slow            | Best     | Maximum accuracy                   |
 
 #### Testing
 
