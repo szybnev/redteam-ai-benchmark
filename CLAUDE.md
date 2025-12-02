@@ -585,6 +585,7 @@ optimization:
   optimizer_model: llama3.3:70b
 
 langfuse:
+  enabled: true
   secret_key: sk-lf-xxx
   public_key: pk-lf-xxx
   host: http://localhost:3000
@@ -619,6 +620,7 @@ Langfuse provides:
 3. **Configure in `config.yaml`**:
    ```yaml
    langfuse:
+     enabled: true  # Explicitly enable Langfuse tracing
      secret_key: sk-lf-xxx
      public_key: pk-lf-xxx
      host: http://localhost:3000  # or https://cloud.langfuse.com
@@ -653,7 +655,7 @@ benchmark-{model}                    # Root trace
 
 ### Usage Notes
 
-- **Automatic activation**: Langfuse is enabled if `secret_key` and `public_key` are present in config
+- **Activation**: Set `enabled: true` in config. If omitted, auto-enables when both `secret_key` and `public_key` are present
 - **Graceful fallback**: Benchmark continues if Langfuse is unavailable (shows warning)
 - **Performance impact**: Minimal (<50ms overhead per trace due to async background uploads)
 - **SDK version**: Uses Langfuse Python SDK v3 (OpenTelemetry-based)
