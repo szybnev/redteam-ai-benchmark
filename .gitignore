@@ -378,3 +378,6 @@ optimized_*.json
 config.yaml
 
 # End of https://www.toptal.com/developers/gitignore/api/python,venv,pycharm+all,visualstudiocode,windows,linux,macos
+
+.agents/
+skills-lock.json
