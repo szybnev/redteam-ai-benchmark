@@ -33,6 +33,7 @@ def create_client(
     endpoint: Optional[str],
     model: str,
     api_key: Optional[str] = None,
+    timeout: Optional[int] = None,
 ) -> APIClient:
     """
     Create appropriate API client based on provider.
@@ -42,6 +43,7 @@ def create_client(
         endpoint: Custom endpoint URL (optional)
         model: Model name/ID
         api_key: API key for providers that require it (e.g., OpenRouter)
+        timeout: Optional request timeout in seconds
 
     Returns:
         Configured APIClient instance
@@ -59,15 +61,20 @@ def create_client(
 
     # Create client
     if provider == "lmstudio":
-        return LMStudioClient(endpoint, model)
+        return LMStudioClient(endpoint, model, timeout=timeout if timeout is not None else 150)
     elif provider == "ollama":
-        return OllamaClient(endpoint, model)
+        return OllamaClient(endpoint, model, timeout=timeout if timeout is not None else 150)
     elif provider == "openrouter":
         if not OPENROUTER_AVAILABLE:
             raise RuntimeError(
                 "OpenRouter requires httpx and tenacity. "
                 "Install with: pip install httpx tenacity"
             )
-        return OpenRouterClient(endpoint, model, api_key=api_key)
+        return OpenRouterClient(
+            endpoint,
+            model,
+            api_key=api_key,
+            timeout=timeout if timeout is not None else 120,
+        )
     else:
         raise ValueError(f"Unknown provider: {provider}")

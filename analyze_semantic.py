@@ -270,7 +270,7 @@ class ResultsAnalyzer:
 
         # Score responses in batches.
         for result, model_scores in zip(
-            source_results, self.scorer.score_responses(score_items)
+            source_results, self.scorer.score_responses(score_items), strict=True
         ):
             q_id = result.get("id")
             for emb_model, score_data in model_scores.items():

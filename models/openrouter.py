@@ -70,10 +70,10 @@ class OpenRouterClient(APIClient):
             "X-Title": os.environ.get("OPENROUTER_SITE_NAME", "RedTeam-AI-Benchmark"),
         }
 
-    def _make_request(self, payload: Dict) -> Dict:
+    def _make_request(self, payload: Dict, retries: int = 3) -> Dict:
         """Make API request with retry logic."""
         @retry(
-            stop=stop_after_attempt(3),
+            stop=stop_after_attempt(retries),
             wait=wait_exponential(multiplier=1, min=4, max=60),
             reraise=True,
         )
@@ -119,7 +119,7 @@ class OpenRouterClient(APIClient):
         }
 
         try:
-            data = self._make_request(payload)
+            data = self._make_request(payload, retries=retries)
             return data["choices"][0]["message"]["content"]
         except httpx.HTTPStatusError as e:
             raise RuntimeError(

@@ -1,19 +1,20 @@
 """Ollama API client."""
 
-import json
-import time
 from typing import Dict, List
 
 import requests
 
-from .base import APIClient
+from .base import APIClient, RequestsRetryMixin
 
 
-class OllamaClient(APIClient):
+class OllamaClient(RequestsRetryMixin, APIClient):
     """Ollama API client."""
 
-    def __init__(self, base_url: str, model_name: str):
+    provider_name = "Ollama"
+
+    def __init__(self, base_url: str, model_name: str, timeout: int = 150):
         super().__init__(base_url, model_name)
+        self.timeout = timeout
         self.session = requests.Session()
 
     def query(
@@ -36,41 +37,13 @@ class OllamaClient(APIClient):
             },
         }
 
-        for attempt in range(retries):
-            try:
-                response = self.session.post(
-                    url, headers=headers, json=payload, timeout=150
-                )
-                response.raise_for_status()
-                data = response.json()
-                return data["message"]["content"]
-
-            except requests.exceptions.Timeout:
-                print(f"   Timeout on attempt {attempt + 1}/{retries}")
-                if attempt == retries - 1:
-                    raise RuntimeError(
-                        f"API timeout after {retries} attempts"
-                    ) from None
-                time.sleep(2**attempt)
-
-            except requests.exceptions.ConnectionError as e:
-                raise RuntimeError(
-                    f"Cannot connect to Ollama at {self.base_url}. Is it running?"
-                ) from e
-
-            except requests.exceptions.HTTPError as e:
-                if e.response.status_code == 429:
-                    print("   Rate limited, waiting...")
-                    time.sleep(5)
-                    continue
-                raise RuntimeError(
-                    f"API error {e.response.status_code}: {e.response.text}"
-                ) from e
-
-            except (KeyError, json.JSONDecodeError) as e:
-                raise RuntimeError(f"Invalid API response format: {e}") from e
-
-        raise RuntimeError("Max retries exceeded")
+        data = self._post_json_with_retries(
+            url=url, headers=headers, payload=payload, retries=retries
+        )
+        try:
+            return data["message"]["content"]
+        except KeyError as e:
+            raise RuntimeError(f"Invalid API response format: {e}") from e
 
     def list_models(self) -> List[Dict]:
         """List available models from Ollama."""

@@ -132,7 +132,7 @@ def _dict_to_scoring_config(data: Dict[str, Any]) -> ScoringConfig:
 def _dict_to_export_config(data: Dict[str, Any]) -> ExportConfig:
     """Convert dict to ExportConfig."""
     return ExportConfig(
-        formats=data.get("formats", ["json"]),
+        formats=[fmt.lower() for fmt in data.get("formats", ["json"])],
         output_dir=data.get("output_dir", "."),
         include_response=data.get("include_response", True),
     )
@@ -211,7 +211,7 @@ def load_config(config_path: str) -> BenchmarkConfig:
     optimization = _dict_to_optimization_config(data.get("optimization", {}))
     langfuse = _dict_to_langfuse_config(data.get("langfuse", {}))
 
-    return BenchmarkConfig(
+    config = BenchmarkConfig(
         provider=provider,
         scoring=scoring,
         export=export,
@@ -224,6 +224,27 @@ def load_config(config_path: str) -> BenchmarkConfig:
         temperature=data.get("temperature", 0.2),
         concurrency=data.get("concurrency", 1),
     )
+    validate_config(config)
+    return config
+
+
+def validate_config(config: BenchmarkConfig) -> None:
+    """Validate config values that affect runtime behavior."""
+    if config.rate_limit_delay < 0:
+        raise ValueError("rate_limit_delay must be >= 0")
+    if config.max_tokens <= 0:
+        raise ValueError("max_tokens must be > 0")
+    if config.temperature < 0:
+        raise ValueError("temperature must be >= 0")
+    if config.concurrency <= 0:
+        raise ValueError("concurrency must be > 0")
+    if config.provider.timeout <= 0:
+        raise ValueError("provider.timeout must be > 0")
+
+    unsupported_formats = set(config.export.formats) - {"json", "csv"}
+    if unsupported_formats:
+        formatted = ", ".join(sorted(unsupported_formats))
+        raise ValueError(f"Unsupported export format(s): {formatted}")
 
 
 def create_default_config(
