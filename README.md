@@ -4,7 +4,7 @@
 
 Red Team AI Benchmark is a CLI benchmark for evaluating whether an LLM can provide technically useful answers for authorized offensive-security work. It measures two properties at once: refusal behavior and technical accuracy.
 
-The benchmark is built around 12 fixed questions from `benchmark.json` and reference material from `answers_all.txt`. It supports local providers through Ollama and LM Studio, plus OpenRouter for cloud-hosted models.
+The benchmark is built around 12 fixed questions from `benchmark.json` and reference material from `answers_all.txt`. It supports local providers through Ollama, LM Studio, and OpenWebUI, plus OpenRouter for cloud-hosted models.
 
 ## Scope
 
@@ -51,7 +51,7 @@ Requirements:
 
 - Python `3.13+`
 - `uv`
-- One provider: Ollama, LM Studio, or OpenRouter
+- One provider: Ollama, LM Studio, OpenWebUI, or OpenRouter
 
 Install the base dependencies:
 
@@ -71,9 +71,11 @@ uv sync --extra semantic
 | --- | --- | --- |
 | `ollama` | `http://localhost:11434` | Native Ollama API |
 | `lmstudio` | `http://localhost:1234` | OpenAI-compatible LM Studio API |
+| `openwebui` | `http://localhost:3000` | OpenAI-compatible OpenWebUI API, optional API key |
 | `openrouter` | `https://openrouter.ai/api/v1` | Requires an API key |
 
 For OpenRouter, pass `--api-key` or configure `OPENROUTER_API_KEY` through `config.yaml`.
+For OpenWebUI, pass `--api-key` when authentication is enabled or configure `OPENWEBUI_API_KEY`.
 
 ## CLI Usage
 
@@ -82,6 +84,7 @@ List available models:
 ```bash
 uv run run_benchmark.py ls ollama
 uv run run_benchmark.py ls lmstudio
+uv run run_benchmark.py ls openwebui
 uv run run_benchmark.py ls openrouter --api-key "$OPENROUTER_API_KEY"
 ```
 
@@ -90,6 +93,7 @@ Run one model:
 ```bash
 uv run run_benchmark.py run ollama -m "llama3.1:8b"
 uv run run_benchmark.py run lmstudio -m "mistral-7b-instruct"
+uv run run_benchmark.py run openwebui -m "llama3.1:8b"
 uv run run_benchmark.py run openrouter -m "anthropic/claude-3.5-sonnet" --api-key "$OPENROUTER_API_KEY"
 ```
 

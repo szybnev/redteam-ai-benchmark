@@ -106,11 +106,51 @@ def _apply_config_defaults(args, config) -> None:
     if config.provider.endpoint and not args.endpoint:
         args.endpoint = config.provider.endpoint
 
-    if config.scoring.method != "keyword" and args.scorer == "keyword":
+    if not getattr(args, "api_key", None):
+        if config.provider.api_key:
+            args.api_key = config.provider.api_key
+        elif config.provider.api_key_env:
+            import os
+
+            args.api_key = os.environ.get(config.provider.api_key_env)
+
+    if (
+        hasattr(args, "scorer")
+        and config.scoring.method != "keyword"
+        and args.scorer == "keyword"
+    ):
         args.scorer = config.scoring.method
 
-    if config.scoring.semantic_model and args.semantic_model == DEFAULT_SEMANTIC_MODEL:
+    if (
+        hasattr(args, "semantic_model")
+        and config.scoring.semantic_model
+        and args.semantic_model == DEFAULT_SEMANTIC_MODEL
+    ):
         args.semantic_model = config.scoring.semantic_model
+
+    if (
+        hasattr(args, "optimize_prompts")
+        and config.optimization.enabled
+        and not args.optimize_prompts
+    ):
+        args.optimize_prompts = True
+    if (
+        hasattr(args, "optimizer_model")
+        and config.optimization.optimizer_model
+        and args.optimizer_model == "llama3.3:70b"
+    ):
+        args.optimizer_model = config.optimization.optimizer_model
+    if (
+        hasattr(args, "optimizer_endpoint")
+        and config.optimization.optimizer_endpoint
+        and not args.optimizer_endpoint
+    ):
+        args.optimizer_endpoint = config.optimization.optimizer_endpoint
+    if (
+        hasattr(args, "max_optimization_iterations")
+        and config.optimization.max_iterations != 3
+    ):
+        args.max_optimization_iterations = config.optimization.max_iterations
 
 
 def _resolve_runtime_options(args, config) -> RuntimeOptions:
@@ -354,8 +394,10 @@ def _run_model_with_export(
 def cmd_list_models(args):
     """List available models from the provider."""
     try:
+        config = _load_optional_config(args)
+        _apply_config_defaults(args, config)
         api_key = getattr(args, "api_key", None)
-        client = create_client(args.provider, args.endpoint, "temp", api_key)
+        client = _create_configured_client(args.provider, args.endpoint, "temp", api_key, config)
 
         print(f"📋 Available models from {args.provider}:")
         print()
@@ -365,18 +407,15 @@ def cmd_list_models(args):
             print("   No models found")
             return
 
-        if args.provider == "lmstudio":
+        if args.provider in {"lmstudio", "openwebui", "openrouter"}:
             for model in models:
-                model_id = model.get("id", "unknown")
+                model_id = model.get("id") or model.get("name", "unknown")
                 print(f"   • {model_id}")
         else:
             for model in models:
                 name = model.get("name") or model.get("id", "unknown")
                 size_gb = model.get("size", 0) / (1024**3)
-                if args.provider == "openrouter":
-                    print(f"   • {name}")
-                else:
-                    print(f"   • {name} ({size_gb:.1f} GB)")
+                print(f"   • {name} ({size_gb:.1f} GB)")
 
         print()
         print(f"💡 Use: uv run run_benchmark.py run {args.provider} -m <model_name>")
@@ -419,16 +458,16 @@ def cmd_interactive(args):
 
         model_options = []
         model_names = []
-        if args.provider == "lmstudio":
+        if args.provider in {"lmstudio", "openwebui", "openrouter"}:
             for model in models:
-                model_id = model.get("id", "unknown")
+                model_id = model.get("id") or model.get("name", "unknown")
                 model_options.append(model_id)
                 model_names.append(model_id)
         else:
             for model in models:
                 name = model.get("name") or model.get("id", "unknown")
                 size_gb = model.get("size", 0) / (1024**3)
-                display_name = name if args.provider == "openrouter" else f"{name} ({size_gb:.1f} GB)"
+                display_name = f"{name} ({size_gb:.1f} GB)"
                 model_options.append(display_name)
                 model_names.append(name)
 
@@ -666,7 +705,9 @@ def cmd_run_benchmark(args):
 
 def _add_provider_arg(parser):
     parser.add_argument(
-        "provider", choices=["lmstudio", "ollama", "openrouter"], help="API provider"
+        "provider",
+        choices=["lmstudio", "ollama", "openwebui", "openrouter"],
+        help="API provider",
     )
 
 
@@ -674,14 +715,17 @@ def _add_endpoint_arg(parser):
     parser.add_argument(
         "-e",
         "--endpoint",
-        help="Custom endpoint URL (default: localhost:1234 for lmstudio, localhost:11434 for ollama)",
+        help=(
+            "Custom endpoint URL (default: localhost:1234 for lmstudio, "
+            "localhost:11434 for ollama, localhost:3000 for openwebui)"
+        ),
     )
 
 
 def _add_api_key_arg(parser):
     parser.add_argument(
         "--api-key",
-        help="API key for providers that require it (e.g., OpenRouter)",
+        help="API key for providers that require it (e.g., OpenRouter, OpenWebUI)",
     )
 
 
@@ -809,6 +853,7 @@ Examples:
     _add_provider_arg(parser_ls)
     _add_endpoint_arg(parser_ls)
     _add_api_key_arg(parser_ls)
+    parser_ls.add_argument("--config", help="Load configuration from YAML file")
 
     parser_run = subparsers.add_parser("run", help="Run benchmark")
     _add_provider_arg(parser_run)
