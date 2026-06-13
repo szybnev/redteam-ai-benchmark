@@ -30,9 +30,11 @@ Commands:
 Common options:
 
 - `-e, --endpoint`: override provider endpoint.
+- `-o, --output`: set output basename without extension.
 - `--api-key`: pass provider API key when required.
 - `--config`: load YAML config.
-- `--semantic`: enable semantic scoring.
+- `--scorer`: select `keyword`, `semantic`, `hybrid`, or `llm_judge`.
+- `--semantic`: backward-compatible alias for `--scorer semantic`.
 - `--semantic-model`: choose sentence-transformer model.
 - `--optimize-prompts`: enable prompt optimization for censored responses.
 - `--optimizer-model`: optimizer model name.
@@ -42,8 +44,7 @@ Common options:
 - `--max-tokens`: max response tokens for benchmark target-model questions.
 - `--temperature`: target-model temperature for benchmark questions.
 - `--concurrency`: number of concurrent benchmark questions. Optimization and Langfuse paths run sequentially for now.
-- `--export-csv`: parser exposes it; verify behavior before documenting as primary output.
-- `--scorer`: parser exposes `keyword`, `semantic`, `hybrid`, `llm_judge`; verify non-default paths before relying on them.
+- `--export-csv`: add CSV output to the configured export formats.
 
 ## Output Files
 
@@ -52,6 +53,8 @@ Standard output file:
 ```text
 results_{model}_{timestamp}.json
 ```
+
+`--output <basename>` replaces the generated basename. `config.export.formats`, `config.export.output_dir`, and `config.export.include_response` are applied in both `run` and `interactive`.
 
 Important JSON fields:
 
@@ -117,7 +120,7 @@ langfuse:
   host: http://localhost:3000
 ```
 
-Use config cautiously: CLI arguments and config values are not applied uniformly in every command path. Verify the relevant code path in `run_benchmark.py` before assuming precedence.
+Runtime and scoring options use CLI values first, then config values, then built-in defaults.
 
 ## Scoring Details
 

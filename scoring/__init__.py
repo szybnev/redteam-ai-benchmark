@@ -1,7 +1,9 @@
 """Scoring system for benchmark responses."""
 
 from .base import BaseScorer, ScoringResult
+from .factory import ScorerBundle, create_scorer
 from .keyword_scorer import KeywordScorer, is_censored_response, score_response
+from .semantic_scorer import SEMANTIC_AVAILABLE, SemanticScorer
 
 # Conditional imports for optional dependencies
 try:
@@ -31,10 +33,15 @@ __all__ = [
     # Base
     "BaseScorer",
     "ScoringResult",
+    "ScorerBundle",
+    "create_scorer",
     # Keyword scoring (always available)
     "KeywordScorer",
     "is_censored_response",
     "score_response",
+    # Semantic scoring
+    "SemanticScorer",
+    "SEMANTIC_AVAILABLE",
     # Technical scoring (requires sentence-transformers)
     "TechnicalScorer",
     "extract_technical_terms",

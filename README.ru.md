@@ -43,7 +43,7 @@ Red Team AI Benchmark — CLI-бенчмарк для проверки того,
 | `60-79.9%` | `requires-validation` |
 | `>= 80%` | `production-ready` |
 
-Семантическая оценка доступна через опциональную группу зависимостей `semantic`. В текущем CLI она включается флагом `--semantic`. Парсер также принимает `--scorer`, а в репозитории есть модули `hybrid` и `llm_judge`, но подтвержденный CLI-путь для семантической оценки — именно `--semantic`.
+CLI поддерживает `--scorer keyword`, `--scorer semantic`, `--scorer hybrid` и `--scorer llm_judge`. Старый флаг `--semantic` сохранен как совместимый alias для `--scorer semantic`. Для `semantic` и `hybrid` нужен `uv sync --extra semantic`; для `llm_judge` нужен OpenRouter API key через `--api-key` или `OPENROUTER_API_KEY`.
 
 ## Установка
 
@@ -103,7 +103,15 @@ uv run run_benchmark.py run ollama -e http://192.168.1.100:11434 -m "mistral"
 
 ```bash
 uv run run_benchmark.py run ollama -m "llama3.1:8b" --semantic
+uv run run_benchmark.py run ollama -m "llama3.1:8b" --scorer semantic
 uv run run_benchmark.py run ollama -m "llama3.1:8b" --semantic --semantic-model all-mpnet-base-v2
+```
+
+Hybrid и LLM-judge оценка:
+
+```bash
+uv run run_benchmark.py run ollama -m "llama3.1:8b" --scorer hybrid
+uv run run_benchmark.py run openrouter -m "anthropic/claude-3.5-sonnet" --scorer llm_judge --api-key "$OPENROUTER_API_KEY"
 ```
 
 Настройки скорости выполнения:
@@ -145,6 +153,7 @@ export:
     - json
     - csv
   output_dir: ./results
+  include_response: true
 
 optimization:
   enabled: false
@@ -198,6 +207,8 @@ uv run run_benchmark.py run ollama -m "llama3.1:8b" \
 results_{model}_{timestamp}.json
 ```
 
+`--output <basename>` задает basename выходного файла без расширения, а `--export-csv` дополнительно пишет CSV. `config.export.formats`, `config.export.output_dir` и `config.export.include_response` применяются в `run` и `interactive`.
+
 Структура JSON:
 
 ```json
@@ -219,7 +230,7 @@ results_{model}_{timestamp}.json
 }
 ```
 
-В коде также есть CSV export utilities в `utils/export.py`. CLI принимает `--export-csv`, но подтвержденный дефолтный путь вывода в `run_benchmark.py` — JSON.
+CSV содержит оценки по вопросам и может включать response snippets, если включен `config.export.include_response`.
 
 ## Langfuse
 

@@ -43,7 +43,7 @@ The final score is the arithmetic mean across all benchmark questions.
 | `60-79.9%` | `requires-validation` |
 | `>= 80%` | `production-ready` |
 
-Semantic scoring is available with the optional `semantic` dependency group. In the current CLI, use `--semantic` to activate it. The parser also exposes `--scorer`, and the repository contains `hybrid` and `llm_judge` scoring modules, but the verified CLI path for semantic scoring is the `--semantic` flag.
+The CLI supports `--scorer keyword`, `--scorer semantic`, `--scorer hybrid`, and `--scorer llm_judge`. The legacy `--semantic` flag remains a backward-compatible alias for `--scorer semantic`. Semantic and hybrid scoring require `uv sync --extra semantic`; `llm_judge` requires an OpenRouter API key via `--api-key` or `OPENROUTER_API_KEY`.
 
 ## Installation
 
@@ -103,7 +103,15 @@ Run semantic scoring:
 
 ```bash
 uv run run_benchmark.py run ollama -m "llama3.1:8b" --semantic
+uv run run_benchmark.py run ollama -m "llama3.1:8b" --scorer semantic
 uv run run_benchmark.py run ollama -m "llama3.1:8b" --semantic --semantic-model all-mpnet-base-v2
+```
+
+Run hybrid or LLM-judge scoring:
+
+```bash
+uv run run_benchmark.py run ollama -m "llama3.1:8b" --scorer hybrid
+uv run run_benchmark.py run openrouter -m "anthropic/claude-3.5-sonnet" --scorer llm_judge --api-key "$OPENROUTER_API_KEY"
 ```
 
 Tune runtime speed settings:
@@ -145,6 +153,7 @@ export:
     - json
     - csv
   output_dir: ./results
+  include_response: true
 
 optimization:
   enabled: false
@@ -198,6 +207,8 @@ Standard JSON output is written as:
 results_{model}_{timestamp}.json
 ```
 
+Use `--output <basename>` to choose the output basename without an extension, and `--export-csv` to also write CSV. `config.export.formats`, `config.export.output_dir`, and `config.export.include_response` apply to both `run` and `interactive`.
+
 The JSON file contains:
 
 ```json
@@ -219,7 +230,7 @@ The JSON file contains:
 }
 ```
 
-The code also contains CSV export utilities in `utils/export.py`. The CLI exposes `--export-csv`, but JSON output is the verified default output path in `run_benchmark.py`.
+CSV output contains per-question scores and can include response snippets when `config.export.include_response` is enabled.
 
 ## Langfuse
 

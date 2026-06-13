@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -6,6 +7,8 @@ import run_benchmark
 from models.lmstudio import LMStudioClient
 from models.ollama import OllamaClient
 from models.openrouter import OpenRouterClient
+from scoring.factory import create_scorer
+from scoring.keyword_scorer import KeywordScorer, score_response
 
 
 class FakeResponse:
@@ -255,3 +258,237 @@ def test_concurrent_runner_preserves_question_order(monkeypatch):
 
     assert [result["id"] for result in results] == [1, 2, 3]
     assert [result["score"] for result in results] == [10, 20, 30]
+
+
+def test_keyword_scorer_factory_uses_canonical_keyword_scorer():
+    bundle = create_scorer(
+        "keyword",
+        semantic_model=run_benchmark.DEFAULT_SEMANTIC_MODEL,
+        answers_file="answers_all.txt",
+        questions=[],
+    )
+
+    assert isinstance(bundle.scorer, KeywordScorer)
+    assert not hasattr(run_benchmark, "score_response")
+    response = "AmsiScanBuffer VirtualProtect patch"
+    assert bundle.score_func(1, response) == score_response(1, response)
+
+
+def test_semantic_flag_is_backward_compatible_alias():
+    semantic_args = SimpleNamespace(semantic=True, scorer="keyword")
+    scorer_args = SimpleNamespace(semantic=False, scorer="semantic")
+
+    assert run_benchmark._resolve_scorer_method(semantic_args) == "semantic"
+    assert run_benchmark._resolve_scorer_method(scorer_args) == "semantic"
+
+
+def test_explicit_optional_scorers_fail_clearly_without_requirements(monkeypatch):
+    questions = [{"id": 1, "category": "cat", "prompt": "prompt"}]
+
+    monkeypatch.setattr("scoring.factory.SEMANTIC_AVAILABLE", False)
+    with pytest.raises(RuntimeError, match="--scorer hybrid requires"):
+        create_scorer(
+            "hybrid",
+            semantic_model=run_benchmark.DEFAULT_SEMANTIC_MODEL,
+            answers_file="answers_all.txt",
+            questions=questions,
+        )
+
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setattr("scoring.factory.SEMANTIC_AVAILABLE", True)
+    with pytest.raises(RuntimeError, match="--scorer hybrid with LLM"):
+        create_scorer(
+            "hybrid",
+            semantic_model=run_benchmark.DEFAULT_SEMANTIC_MODEL,
+            answers_file="answers_all.txt",
+            questions=questions,
+            openrouter_api_key=None,
+            use_llm_in_gray_zone=True,
+        )
+
+    with pytest.raises(RuntimeError, match="--scorer llm_judge requires"):
+        create_scorer(
+            "llm_judge",
+            semantic_model=run_benchmark.DEFAULT_SEMANTIC_MODEL,
+            answers_file="answers_all.txt",
+            questions=questions,
+            openrouter_api_key=None,
+        )
+
+
+def test_interactive_loads_questions_once_for_multiple_models(monkeypatch):
+    class FakeClient:
+        base_url = "http://provider.local"
+
+        def __init__(self, model_name):
+            self.model_name = model_name
+            self.closed = False
+
+        def test_connection(self):
+            return True
+
+        def list_models(self):
+            return [{"name": "model-a", "size": 1}, {"name": "model-b", "size": 2}]
+
+        def query(self, prompt, max_tokens=1024, retries=3, temperature=0.2):
+            return "AmsiScanBuffer VirtualProtect patch"
+
+        def close(self):
+            self.closed = True
+
+    load_calls = []
+
+    def fake_load_questions(filepath="benchmark.json"):
+        load_calls.append(filepath)
+        return [{"id": 1, "category": "AMSI", "prompt": "prompt"}]
+
+    def fake_create_client(provider, endpoint, model_name, api_key=None):
+        return FakeClient(model_name)
+
+    args = SimpleNamespace(
+        provider="ollama",
+        endpoint=None,
+        api_key=None,
+        config=None,
+        scorer="keyword",
+        semantic=False,
+        semantic_model=run_benchmark.DEFAULT_SEMANTIC_MODEL,
+        rate_limit_delay=0,
+        max_tokens=32,
+        temperature=0.2,
+        concurrency=1,
+        optimize_prompts=False,
+        optimizer_model="optimizer",
+        optimizer_endpoint=None,
+        max_optimization_iterations=1,
+        export_csv=False,
+        output=None,
+    )
+
+    monkeypatch.setattr(run_benchmark, "create_client", fake_create_client)
+    monkeypatch.setattr(
+        run_benchmark,
+        "pick",
+        lambda *args, **kwargs: [("model-a", 0), ("model-b", 1)],
+    )
+    monkeypatch.setattr(run_benchmark, "load_questions", fake_load_questions)
+    monkeypatch.setattr(
+        run_benchmark,
+        "_export_benchmark_results",
+        lambda *args, **kwargs: {"json": "ignored.json"},
+    )
+
+    run_benchmark.cmd_interactive(args)
+
+    assert load_calls == ["benchmark.json"]
+
+
+def test_langfuse_tracer_buffers_until_end_benchmark(monkeypatch):
+    class FakeSpan:
+        def __init__(self, name, recorder):
+            self.name = name
+            self.recorder = recorder
+
+        def start_span(self, name, metadata=None):
+            self.recorder["spans"].append({"name": name, "metadata": metadata})
+            return FakeSpan(name, self.recorder)
+
+        def update(self, **kwargs):
+            self.recorder["updates"].append({"name": self.name, "data": kwargs})
+
+        def end(self):
+            self.recorder["ended"].append(self.name)
+
+    class FakeLangfuse:
+        instances = []
+
+        def __init__(self, **kwargs):
+            self.recorder = {"roots": [], "spans": [], "updates": [], "ended": []}
+            self.flushed = False
+            FakeLangfuse.instances.append(self)
+
+        def start_span(self, name, metadata=None):
+            self.recorder["roots"].append({"name": name, "metadata": metadata})
+            return FakeSpan(name, self.recorder)
+
+        def flush(self):
+            self.flushed = True
+
+    monkeypatch.setattr(run_benchmark, "Langfuse", FakeLangfuse)
+    tracer = run_benchmark.LangfuseTracer(
+        SimpleNamespace(public_key="pub", secret_key="sec", host="http://langfuse")
+    )
+    fake = FakeLangfuse.instances[0]
+
+    tracer.start_benchmark("model", "keyword")
+    tracer.log_generation(1, "cat", "prompt", "response", 50, 12.5, "model")
+    tracer.start_optimization(1, "cat")
+    tracer.log_optimization_attempt(
+        0, "original", "prompt", "response", 0, 1.2, "model"
+    )
+
+    assert fake.recorder["roots"] == []
+    assert fake.recorder["spans"] == []
+
+    tracer.end_optimization(success=True, best_score=50, iterations=1)
+    tracer.end_benchmark(50.0, "not-suitable")
+
+    assert fake.recorder["roots"][0]["name"] == "benchmark-model"
+    assert [span["name"] for span in fake.recorder["spans"]] == [
+        "Q1-cat",
+        "optimization-Q1",
+        "iter-0-original",
+    ]
+    assert fake.flushed is True
+
+
+def test_export_helper_writes_json_csv_and_preserves_top_level_schema(tmp_path):
+    args = SimpleNamespace(export_csv=True, output="custom")
+    config = SimpleNamespace(
+        export=SimpleNamespace(
+            formats=["json"],
+            output_dir=str(tmp_path),
+            include_response=False,
+        )
+    )
+    results = [
+        {
+            "id": 1,
+            "category": "AMSI",
+            "score": 50,
+            "censored": False,
+            "response_snippet": "snippet",
+            "full_response": "full response",
+        }
+    ]
+
+    exported = run_benchmark._export_benchmark_results(
+        results=results,
+        model_name="org/model:name",
+        total_score=50.0,
+        interpretation="not-suitable",
+        scoring_method="keyword",
+        args=args,
+        config=config,
+    )
+
+    json_path = tmp_path / "custom.json"
+    csv_path = tmp_path / "custom.csv"
+    assert exported == {"json": str(json_path), "csv": str(csv_path)}
+    assert json_path.exists()
+    assert csv_path.exists()
+
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    required_keys = {
+        "model",
+        "timestamp",
+        "scoring_method",
+        "total_score",
+        "results",
+        "interpretation",
+    }
+    assert required_keys.issubset(payload)
+    assert payload["model"] == "org/model:name"
+    assert payload["scoring_method"] == "keyword"
+    csv_header = csv_path.read_text(encoding="utf-8").splitlines()[0]
+    assert "response_snippet" not in csv_header

@@ -41,6 +41,8 @@ class BenchmarkExporter:
             timestamp: Timestamp for filenames (default: now)
         """
         self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.raw_model_name = model_name
         self.model_name = self._sanitize_filename(model_name)
         self.timestamp = timestamp or datetime.now()
 
@@ -59,6 +61,7 @@ class BenchmarkExporter:
         results: List[Dict],
         total_score: float,
         interpretation: str,
+        scoring_method: str = "keyword",
         metadata: Optional[Dict] = None,
         filename: Optional[str] = None,
     ) -> Path:
@@ -75,11 +78,14 @@ class BenchmarkExporter:
         Returns:
             Path to created JSON file
         """
-        output_file = self.output_dir / f"{filename or self._get_base_filename()}.json"
+        output_file = self.output_dir / (
+            f"{filename or self._get_base_filename()}.json"
+        )
 
         data = {
-            "model": self.model_name,
+            "model": self.raw_model_name,
             "timestamp": self.timestamp.isoformat(),
+            "scoring_method": scoring_method,
             "total_score": round(total_score, 2),
             "interpretation": interpretation,
             "results": [_serialize_value(r) for r in results],
@@ -112,7 +118,9 @@ class BenchmarkExporter:
         Returns:
             Path to created CSV file
         """
-        output_file = self.output_dir / f"{filename or self._get_base_filename()}.csv"
+        output_file = self.output_dir / (
+            f"{filename or self._get_base_filename()}.csv"
+        )
 
         # Define columns
         columns = [
@@ -145,7 +153,11 @@ class BenchmarkExporter:
                     response = result.get("response_snippet", "")
                     if not response:
                         full_response = result.get("full_response", "")
-                        response = full_response[:200] + "..." if len(full_response) > 200 else full_response
+                        response = (
+                            full_response[:200] + "..."
+                            if len(full_response) > 200
+                            else full_response
+                        )
                     row["response_snippet"] = response
 
                 writer.writerow(row)
@@ -206,6 +218,9 @@ def export_results(
     output_dir: str = ".",
     formats: Optional[List[str]] = None,
     metadata: Optional[Dict] = None,
+    filename: Optional[str] = None,
+    include_response: bool = True,
+    scoring_method: str = "keyword",
 ) -> Dict[str, Path]:
     """
     Convenience function to export results to multiple formats.
@@ -218,6 +233,9 @@ def export_results(
         output_dir: Output directory
         formats: List of formats ("json", "csv") - default: ["json"]
         metadata: Additional metadata
+        filename: Custom filename without extension
+        include_response: Whether CSV output includes response snippets
+        scoring_method: Scoring method label for JSON output
 
     Returns:
         Dict mapping format name to file path
@@ -233,14 +251,17 @@ def export_results(
             results=results,
             total_score=total_score,
             interpretation=interpretation,
+            scoring_method=scoring_method,
             metadata=metadata,
+            filename=filename,
         )
 
     if "csv" in formats:
         exported["csv"] = exporter.export_csv(
             results=results,
             total_score=total_score,
-            include_response=True,
+            filename=filename,
+            include_response=include_response,
         )
 
     return exported
