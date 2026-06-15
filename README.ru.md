@@ -104,8 +104,10 @@ uv run run_benchmark.py run ollama -e http://192.168.1.100:11434 -m "mistral"
 ```bash
 uv run run_benchmark.py run ollama -m "llama3.1:8b" --semantic
 uv run run_benchmark.py run ollama -m "llama3.1:8b" --scorer semantic
-uv run run_benchmark.py run ollama -m "llama3.1:8b" --semantic --semantic-model all-mpnet-base-v2
+uv run run_benchmark.py run ollama -m "llama3.1:8b" --semantic --semantic-model Qwen/Qwen3-Embedding-0.6B
 ```
+
+Модель Qwen по умолчанию запускается на CPU, чтобы не падать с CUDA out-of-memory на занятой GPU. Для принудительного GPU запуска установите `REDTEAM_SEMANTIC_DEVICE=cuda`.
 
 Hybrid и LLM-judge оценка:
 
@@ -146,7 +148,7 @@ provider:
 
 scoring:
   method: keyword
-  semantic_model: sentence-transformers/all-mpnet-base-v2
+  semantic_model: Qwen/Qwen3-Embedding-0.6B
 
 export:
   formats:

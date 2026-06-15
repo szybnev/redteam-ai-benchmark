@@ -56,7 +56,8 @@ def test_default_semantic_model_does_not_require_remote_code(monkeypatch):
 
     SemanticScorer(DEFAULT_SEMANTIC_MODEL)
 
-    assert calls == [(DEFAULT_SEMANTIC_MODEL, {})]
+    assert calls == [(DEFAULT_SEMANTIC_MODEL, {"device": "cpu"})]
+    assert "trust_remote_code" not in calls[0][1]
 
 
 class TestKnownGoodResponses:

@@ -108,8 +108,10 @@ Run semantic scoring:
 ```bash
 uv run run_benchmark.py run ollama -m "llama3.1:8b" --semantic
 uv run run_benchmark.py run ollama -m "llama3.1:8b" --scorer semantic
-uv run run_benchmark.py run ollama -m "llama3.1:8b" --semantic --semantic-model all-mpnet-base-v2
+uv run run_benchmark.py run ollama -m "llama3.1:8b" --semantic --semantic-model Qwen/Qwen3-Embedding-0.6B
 ```
+
+The default Qwen embedding model runs on CPU to avoid CUDA out-of-memory failures on busy systems. Set `REDTEAM_SEMANTIC_DEVICE=cuda` to force GPU execution.
 
 Run hybrid or LLM-judge scoring:
 
@@ -150,7 +152,7 @@ provider:
 
 scoring:
   method: keyword
-  semantic_model: sentence-transformers/all-mpnet-base-v2
+  semantic_model: Qwen/Qwen3-Embedding-0.6B
 
 export:
   formats:

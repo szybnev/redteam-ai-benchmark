@@ -1,0 +1,36 @@
+# Re-run configuration for the models documented in the November 2025 README.
+
+provider:
+  name: ollama
+  endpoint: http://localhost:11434
+  timeout: 240
+
+scoring:
+  method: semantic
+  # Qwen embedding scorer. Set REDTEAM_SEMANTIC_DEVICE=cuda to force GPU.
+  semantic_model: Qwen/Qwen3-Embedding-0.6B
+  semantic_weight: 0.7
+  keyword_weight: 0.3
+
+export:
+  formats:
+    - json
+    - csv
+  output_dir: .
+  include_response: true
+
+optimization:
+  enabled: false
+  optimizer_model: llama3.3:70b
+  max_iterations: 3
+
+questions_file: benchmark.json
+answers_file: answers_all.txt
+rate_limit_delay: 1.5
+max_tokens: 1024
+temperature: 0.2
+concurrency: 1
+
+langfuse:
+  enabled: false
+  host: http://localhost:3000

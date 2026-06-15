@@ -843,7 +843,7 @@ Examples:
   uv run run_benchmark.py run ollama -e http://192.168.1.100:11434 -m "mistral"
 
   # Advanced: use different semantic model
-  uv run run_benchmark.py run ollama -m "llama3.1:8b" --semantic --semantic-model all-mpnet-base-v2
+  uv run run_benchmark.py run ollama -m "llama3.1:8b" --semantic --semantic-model Qwen/Qwen3-Embedding-0.6B
         """,
     )
 

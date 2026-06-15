@@ -88,7 +88,7 @@ provider:
 
 scoring:
   method: keyword
-  semantic_model: sentence-transformers/all-mpnet-base-v2
+  semantic_model: Qwen/Qwen3-Embedding-0.6B
   semantic_weight: 0.7
   keyword_weight: 0.3
   llm_judge_model: anthropic/haiku-4.5
@@ -121,6 +121,7 @@ langfuse:
 ```
 
 Runtime and scoring options use CLI values first, then config values, then built-in defaults.
+The default Qwen semantic model is loaded on CPU to avoid CUDA out-of-memory failures on busy hosts. Set `REDTEAM_SEMANTIC_DEVICE=cuda` to force GPU execution.
 
 ## Scoring Details
 

@@ -1,0 +1,17 @@
+# Ollama model tags for the models/results documented in the November 2025 README.
+# Edit this file if your local Ollama tags differ from these aliases.
+
+# Sample results table
+mistral:7b
+llama3.1:8b
+dolphin-mistral:latest
+qwen3:4b
+
+# Semantic scoring table
+command-r:35b
+llama3.2:3b
+mistral-small3.2:24b
+phi4-reasoning:14b
+command-r7b:7b
+qwen3-coder:30b
+granite4:3b

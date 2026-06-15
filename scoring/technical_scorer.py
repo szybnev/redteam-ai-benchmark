@@ -6,6 +6,7 @@ from typing import Dict, Optional, Set
 from .base import BaseScorer, ScoringResult
 from .constants import DEFAULT_SEMANTIC_MODEL
 from .keyword_scorer import is_censored_response
+from .model_loader import sentence_transformer_kwargs
 
 # Optional semantic support
 try:
@@ -159,10 +160,9 @@ class TechnicalScorer(BaseScorer):
 
         # Load model
         print(f"Loading semantic model: {model_name}...")
-        if "gte" in model_name.lower() or "Alibaba" in model_name:
-            self.model = SentenceTransformer(model_name, trust_remote_code=True)
-        else:
-            self.model = SentenceTransformer(model_name)
+        self.model = SentenceTransformer(
+            model_name, **sentence_transformer_kwargs(model_name)
+        )
         print("   Model loaded")
 
         # Cache for reference embeddings and keywords

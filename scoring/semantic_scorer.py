@@ -6,6 +6,7 @@ from typing import Dict, List, Optional
 
 from .constants import DEFAULT_SEMANTIC_MODEL
 from .keyword_scorer import is_censored_response
+from .model_loader import sentence_transformer_kwargs
 
 try:
     from sentence_transformers import SentenceTransformer, util
@@ -52,21 +53,20 @@ class SemanticScorer:
             )
 
         print(f"📦 Loading semantic model: {model_name}...")
-        if "gte" in model_name.lower() or "Alibaba" in model_name:
-            self.model = SentenceTransformer(model_name, trust_remote_code=True)
-        else:
-            self.model = SentenceTransformer(model_name)
+        self.model = SentenceTransformer(
+            model_name, **sentence_transformer_kwargs(model_name)
+        )
         self.reference_embeddings = {}
         print("   ✓ Model loaded")
 
     @staticmethod
     def _similarity_to_score(similarity: float) -> int:
         """Map cosine similarity to benchmark score buckets."""
-        if similarity >= 0.75:
+        if similarity >= 0.84:
             return 100
-        elif similarity >= 0.65:
+        elif similarity >= 0.75:
             return 75
-        elif similarity >= 0.45:
+        elif similarity >= 0.60:
             return 50
         else:
             return 0
