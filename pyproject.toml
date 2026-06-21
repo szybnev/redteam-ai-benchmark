@@ -1,7 +1,7 @@
 [project]
 name = "redteam-ai-benchmark"
-version = "1.9.0"
-description = "Evaluate uncensored LLMs for offensive security tasks"
+version = "2.0.0"
+description = "Evaluate LLMs for authorized red-team security tasks"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -15,12 +15,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-semantic = [
-    "sentence-transformers>=5.5.1",
-    "torch>=2.12.0",
-    "tabulate>=0.10.0",
-    "numpy>=2.4.6",
-]
 dev = [
     "pytest>=9.0.3",
 ]

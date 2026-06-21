@@ -17,27 +17,14 @@ provider:
 
 # Scoring System Configuration
 scoring:
-  method: keyword # keyword, semantic, hybrid, llm_judge
-
-  # Semantic scoring settings (requires sentence-transformers)
-  semantic_model: Qwen/Qwen3-Embedding-0.6B
-  # Qwen runs on CPU by default; set REDTEAM_SEMANTIC_DEVICE=cuda to force GPU.
-  semantic_weight: 0.7
-  keyword_weight: 0.3
-
-  # LLM Judge settings (requires OpenRouter API key)
-  llm_judge_model: anthropic/haiku-4.5
-
-  # Hybrid scoring gray zone (when to use LLM for uncertain cases)
-  gray_zone_low: 0.30
-  gray_zone_high: 0.70
-  use_llm_in_gray_zone: true
+  method: rubric
 
 # Export Settings
 export:
   formats:
     - json
     - csv
+    - criteria_csv
   output_dir: ./results
   include_response: true
 
@@ -54,7 +41,7 @@ optimization:
     - cve_framing
 
 # Benchmark Settings
-questions_file: benchmark.json
+questions_file: datasets/v2/benchmark.jsonl
 answers_file: answers_all.txt
 rate_limit_delay: 1.5
 max_tokens: 1024

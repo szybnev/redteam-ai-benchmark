@@ -7,7 +7,9 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from scoring.constants import DEFAULT_SEMANTIC_MODEL
+DEFAULT_QUESTIONS_FILE = "datasets/v2/benchmark.jsonl"
+DEFAULT_ANSWERS_FILE = "answers_all.txt"
+DEFAULT_SCORER = "rubric"
 
 
 @dataclass
@@ -26,14 +28,7 @@ class ProviderConfig:
 class ScoringConfig:
     """Configuration for scoring system."""
 
-    method: str = "keyword"  # keyword, semantic, hybrid, llm_judge
-    semantic_model: str = DEFAULT_SEMANTIC_MODEL
-    semantic_weight: float = 0.7
-    keyword_weight: float = 0.3
-    llm_judge_model: str = "anthropic/claude-3.5-sonnet"
-    gray_zone_low: float = 0.30
-    gray_zone_high: float = 0.70
-    use_llm_in_gray_zone: bool = True
+    method: str = DEFAULT_SCORER
 
 
 @dataclass
@@ -80,8 +75,8 @@ class BenchmarkConfig:
     export: ExportConfig = field(default_factory=ExportConfig)
     optimization: OptimizationConfig = field(default_factory=OptimizationConfig)
     langfuse: LangfuseConfig = field(default_factory=LangfuseConfig)
-    questions_file: str = "benchmark.json"
-    answers_file: str = "answers_all.txt"
+    questions_file: str = DEFAULT_QUESTIONS_FILE
+    answers_file: str = DEFAULT_ANSWERS_FILE
     rate_limit_delay: float = 1.5
     max_tokens: int = 768
     temperature: float = 0.2
@@ -127,14 +122,7 @@ def _dict_to_provider_config(data: Dict[str, Any]) -> ProviderConfig:
 def _dict_to_scoring_config(data: Dict[str, Any]) -> ScoringConfig:
     """Convert dict to ScoringConfig."""
     return ScoringConfig(
-        method=data.get("method", "keyword"),
-        semantic_model=data.get("semantic_model", DEFAULT_SEMANTIC_MODEL),
-        semantic_weight=data.get("semantic_weight", 0.7),
-        keyword_weight=data.get("keyword_weight", 0.3),
-        llm_judge_model=data.get("llm_judge_model", "anthropic/claude-3.5-sonnet"),
-        gray_zone_low=data.get("gray_zone_low", 0.30),
-        gray_zone_high=data.get("gray_zone_high", 0.70),
-        use_llm_in_gray_zone=data.get("use_llm_in_gray_zone", True),
+        method=data.get("method", DEFAULT_SCORER),
     )
 
 
@@ -227,8 +215,8 @@ def load_config(config_path: str) -> BenchmarkConfig:
         export=export,
         optimization=optimization,
         langfuse=langfuse,
-        questions_file=data.get("questions_file", "benchmark.json"),
-        answers_file=data.get("answers_file", "answers_all.txt"),
+        questions_file=data.get("questions_file", DEFAULT_QUESTIONS_FILE),
+        answers_file=data.get("answers_file", DEFAULT_ANSWERS_FILE),
         rate_limit_delay=data.get("rate_limit_delay", 1.5),
         max_tokens=data.get("max_tokens", 768),
         temperature=data.get("temperature", 0.2),
@@ -251,7 +239,10 @@ def validate_config(config: BenchmarkConfig) -> None:
     if config.provider.timeout <= 0:
         raise ValueError("provider.timeout must be > 0")
 
-    unsupported_formats = set(config.export.formats) - {"json", "csv"}
+    if config.scoring.method != DEFAULT_SCORER:
+        raise ValueError(f"Unsupported scoring method: {config.scoring.method}")
+
+    unsupported_formats = set(config.export.formats) - {"json", "csv", "criteria_csv"}
     if unsupported_formats:
         formatted = ", ".join(sorted(unsupported_formats))
         raise ValueError(f"Unsupported export format(s): {formatted}")
@@ -303,9 +294,6 @@ def save_config(config: BenchmarkConfig, config_path: str) -> None:
         },
         "scoring": {
             "method": config.scoring.method,
-            "semantic_model": config.scoring.semantic_model,
-            "semantic_weight": config.scoring.semantic_weight,
-            "keyword_weight": config.scoring.keyword_weight,
         },
         "export": {
             "formats": config.export.formats,

@@ -46,6 +46,13 @@ def _make_result(
     response: str,
     censored: bool = False,
     similarity: Optional[float] = None,
+    latency_ms: Optional[float] = None,
+    normalized_score: Optional[float] = None,
+    critical_error: bool = False,
+    criteria_passed: Optional[List[str]] = None,
+    criteria_failed: Optional[List[str]] = None,
+    evidence: Optional[List[Dict[str, Any]]] = None,
+    metrics: Optional[Dict[str, Any]] = None,
     details: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build the persisted per-question result object."""
@@ -57,6 +64,17 @@ def _make_result(
         full_response=response,
         censored=censored,
         similarity=similarity,
+        latency_ms=latency_ms,
+        normalized_score=normalized_score,
+        critical_error=critical_error,
+        criteria_passed=criteria_passed or [],
+        criteria_failed=criteria_failed or [],
+        evidence=evidence or [],
+        metrics=metrics or {},
+        difficulty=q.get("difficulty"),
+        domain=q.get("domain"),
+        capability=q.get("capability"),
+        weight=float(q.get("weight", 1.0)),
         details=details or {},
     ).to_dict()
 
@@ -87,6 +105,12 @@ def _query_and_score(
         latency_ms=latency_ms,
         censored=scoring.censored,
         similarity=scoring.similarity,
+        normalized_score=scoring.normalized_score,
+        critical_error=scoring.critical_error,
+        criteria_passed=scoring.criteria_passed,
+        criteria_failed=scoring.criteria_failed,
+        evidence=scoring.evidence,
+        metrics=scoring.metrics,
         details=scoring.details,
     ).__dict__
 
@@ -134,6 +158,12 @@ def _run_questions_sequential(
         latency_ms = query_result["latency_ms"]
         censored = query_result["censored"]
         similarity = query_result["similarity"]
+        normalized_score = query_result["normalized_score"]
+        critical_error = query_result["critical_error"]
+        criteria_passed = query_result["criteria_passed"]
+        criteria_failed = query_result["criteria_failed"]
+        evidence = query_result["evidence"]
+        metrics = query_result["metrics"]
         details = query_result["details"]
 
         if score == 0 and optimizer:
@@ -186,6 +216,12 @@ def _run_questions_sequential(
             )
             censored = opt_scoring.censored
             similarity = opt_scoring.similarity
+            normalized_score = opt_scoring.normalized_score
+            critical_error = opt_scoring.critical_error
+            criteria_passed = opt_scoring.criteria_passed
+            criteria_failed = opt_scoring.criteria_failed
+            evidence = opt_scoring.evidence
+            metrics = opt_scoring.metrics
             details = opt_scoring.details
 
             optimization_results.append(
@@ -213,7 +249,23 @@ def _run_questions_sequential(
                 model=model_name,
             )
 
-        results.append(_make_result(q, score, response, censored, similarity, details))
+        results.append(
+            _make_result(
+                q,
+                score,
+                response,
+                censored,
+                similarity,
+                latency_ms,
+                normalized_score,
+                critical_error,
+                criteria_passed,
+                criteria_failed,
+                evidence,
+                metrics,
+                details,
+            )
+        )
         try:
             _sleep_between_requests(runtime.rate_limit_delay)
         except GracefulShutdown:
@@ -280,6 +332,13 @@ def _run_questions_concurrent(
                 query_result["response"],
                 query_result["censored"],
                 query_result["similarity"],
+                query_result["latency_ms"],
+                query_result["normalized_score"],
+                query_result["critical_error"],
+                query_result["criteria_passed"],
+                query_result["criteria_failed"],
+                query_result["evidence"],
+                query_result["metrics"],
                 query_result["details"],
             )
     except GracefulShutdown:

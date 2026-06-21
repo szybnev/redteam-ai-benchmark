@@ -1,6 +1,11 @@
 """CLI entrypoint for Red Team AI Benchmark."""
 
 import argparse
+import hashlib
+import importlib.metadata
+import json
+import re
+import subprocess
 import sys
 import time
 from typing import Dict, List
@@ -9,6 +14,7 @@ from pick import pick
 
 import tracing.langfuse as langfuse_module
 from benchmark import (
+    BenchmarkDataset,
     GracefulShutdown,
     QuestionLoadError,
     RuntimeOptions,
@@ -19,9 +25,12 @@ from benchmark import (
     _run_questions_sequential,
     _sleep_between_requests,
     install_signal_handlers,
+    load_dataset,
     load_questions,
     run_single_model_benchmark,
 )
+from benchmark.offline_judge import add_judge_args
+from benchmark.offline_judge import run as run_offline_judge
 from benchmark.types import (
     DEFAULT_CONCURRENCY,
     DEFAULT_MAX_TOKENS,
@@ -31,18 +40,22 @@ from benchmark.types import (
 from models import create_client
 from optimization import PromptOptimizer, save_optimization_results
 from scoring import create_scorer
-from scoring.constants import DEFAULT_SEMANTIC_MODEL
-from scoring.keyword_scorer import is_censored_response
-from scoring.semantic_scorer import (
-    SEMANTIC_AVAILABLE,
-    SemanticScorer,
-    parse_reference_answers,
-)
+from scoring.refusal import is_censored_response
 from tracing import LANGFUSE_AVAILABLE
 from utils import load_config
+from utils.config import DEFAULT_QUESTIONS_FILE, DEFAULT_SCORER
 from utils.export import BenchmarkExporter
 
 Langfuse = langfuse_module.Langfuse
+BENCHMARK_VERSION = "2.0.0"
+DEFAULT_PROFILE = "standard"
+PROFILE_DEFAULTS = {
+    "quick": {"questions_file": DEFAULT_QUESTIONS_FILE},
+    "standard": {"questions_file": DEFAULT_QUESTIONS_FILE},
+    "enterprise": {"questions_file": DEFAULT_QUESTIONS_FILE},
+    "local-only": {"questions_file": DEFAULT_QUESTIONS_FILE},
+    "cloud-comparison": {"questions_file": DEFAULT_QUESTIONS_FILE},
+}
 
 
 class LangfuseTracer(langfuse_module.LangfuseTracer):
@@ -56,16 +69,14 @@ __all__ = [
     "DEFAULT_CONCURRENCY",
     "DEFAULT_MAX_TOKENS",
     "DEFAULT_RATE_LIMIT_DELAY",
-    "DEFAULT_SEMANTIC_MODEL",
     "DEFAULT_TEMPERATURE",
+    "BenchmarkDataset",
     "LANGFUSE_AVAILABLE",
     "GracefulShutdown",
     "Langfuse",
     "LangfuseTracer",
     "PromptOptimizer",
     "RuntimeOptions",
-    "SEMANTIC_AVAILABLE",
-    "SemanticScorer",
     "_effective_concurrency",
     "_make_result",
     "_query_and_score",
@@ -73,10 +84,12 @@ __all__ = [
     "_run_questions_sequential",
     "_sleep_between_requests",
     "cmd_interactive",
+    "cmd_judge",
     "cmd_list_models",
     "cmd_run_benchmark",
     "is_censored_response",
     "install_signal_handlers",
+    "load_dataset",
     "load_questions",
     "main",
     "parse_reference_answers",
@@ -115,20 +128,6 @@ def _apply_config_defaults(args, config) -> None:
             args.api_key = os.environ.get(config.provider.api_key_env)
 
     if (
-        hasattr(args, "scorer")
-        and config.scoring.method != "keyword"
-        and args.scorer == "keyword"
-    ):
-        args.scorer = config.scoring.method
-
-    if (
-        hasattr(args, "semantic_model")
-        and config.scoring.semantic_model
-        and args.semantic_model == DEFAULT_SEMANTIC_MODEL
-    ):
-        args.semantic_model = config.scoring.semantic_model
-
-    if (
         hasattr(args, "optimize_prompts")
         and config.optimization.enabled
         and not args.optimize_prompts
@@ -151,6 +150,14 @@ def _apply_config_defaults(args, config) -> None:
         and config.optimization.max_iterations != 3
     ):
         args.max_optimization_iterations = config.optimization.max_iterations
+
+
+def _questions_file_for_args(args, config) -> str:
+    """Resolve questions file through config or runtime profile."""
+    if config:
+        return config.questions_file
+    profile = getattr(args, "profile", DEFAULT_PROFILE)
+    return PROFILE_DEFAULTS.get(profile, PROFILE_DEFAULTS[DEFAULT_PROFILE])["questions_file"]
 
 
 def _resolve_runtime_options(args, config) -> RuntimeOptions:
@@ -201,47 +208,56 @@ def _validate_runtime_options(options: RuntimeOptions) -> None:
         raise ValueError("--concurrency must be > 0")
 
 
-def _resolve_scorer_method(args) -> str:
-    """Resolve scorer method while preserving --semantic compatibility."""
-    return "semantic" if getattr(args, "semantic", False) else args.scorer
-
-
 def _create_scorer_bundle(args, config, questions: List[Dict]):
     """Create the configured scorer bundle or exit with a clear CLI error."""
-    method = _resolve_scorer_method(args)
-    answers_file = config.answers_file if config else "answers_all.txt"
-    scoring_config = config.scoring if config else None
-
     try:
         return create_scorer(
-            method,
-            semantic_model=args.semantic_model,
-            answers_file=answers_file,
+            DEFAULT_SCORER,
             questions=questions,
-            openrouter_api_key=getattr(args, "api_key", None),
-            llm_judge_model=(
-                scoring_config.llm_judge_model
-                if scoring_config
-                else "anthropic/claude-3.5-sonnet"
-            ),
-            semantic_weight=scoring_config.semantic_weight if scoring_config else 0.7,
-            keyword_weight=scoring_config.keyword_weight if scoring_config else 0.3,
-            use_llm_in_gray_zone=(
-                scoring_config.use_llm_in_gray_zone if scoring_config else True
-            ),
         )
-    except RuntimeError as e:
+    except (RuntimeError, ValueError) as e:
         print(f"❌ Error: {e}")
         sys.exit(1)
 
 
-def _load_questions_for_cli(filepath: str):
-    """Load questions and convert loader errors into CLI exits."""
+def parse_reference_answers(filepath: str = "answers_all.txt") -> Dict[int, str]:
+    """Load legacy reference answers for prompt optimization context."""
     try:
-        return load_questions(filepath)
+        with open(filepath, "r", encoding="utf-8") as f:
+            content = f.read()
+    except FileNotFoundError:
+        return {}
+
+    return {
+        int(q_id): answer.strip()
+        for q_id, answer in re.findall(
+            r"=== Q(\d+):.*?===\s+(.*?)(?=\n=== Q\d+:|$)",
+            content,
+            re.DOTALL,
+        )
+    }
+
+
+def _load_dataset_for_cli(filepath: str) -> BenchmarkDataset:
+    """Load a dataset and convert loader errors into CLI exits."""
+    try:
+        return load_dataset(filepath)
     except QuestionLoadError as e:
         print(f"❌ Error: {e}")
         sys.exit(1)
+
+
+def _filter_questions_by_profile(
+    questions: List[Dict],
+    profile: str,
+) -> List[Dict]:
+    """Filter v2 questions by runtime profile."""
+    filtered = [
+        question
+        for question in questions
+        if profile in question.get("profiles", [DEFAULT_PROFILE, "enterprise"])
+    ]
+    return filtered or questions
 
 
 def _create_configured_client(provider, endpoint, model_name, api_key, config):
@@ -250,6 +266,98 @@ def _create_configured_client(provider, endpoint, model_name, api_key, config):
     if timeout is None:
         return create_client(provider, endpoint, model_name, api_key)
     return create_client(provider, endpoint, model_name, api_key, timeout=timeout)
+
+
+def _package_version() -> str:
+    try:
+        return importlib.metadata.version("redteam-ai-benchmark")
+    except importlib.metadata.PackageNotFoundError:
+        return BENCHMARK_VERSION
+
+
+def _git_commit() -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            check=True,
+            text=True,
+        )
+        return result.stdout.strip()
+    except Exception:
+        return None
+
+
+def _stable_hash(payload: Dict) -> str:
+    encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _export_run_config(
+    *,
+    args,
+    model_name: str | None,
+    dataset: BenchmarkDataset | None,
+    runtime: RuntimeOptions | None,
+) -> Dict:
+    """Build stable, non-secret run parameters for JSON exports."""
+    return {
+        "provider": getattr(args, "provider", None),
+        "endpoint": getattr(args, "endpoint", None),
+        "model": model_name,
+        "profile": getattr(args, "profile", DEFAULT_PROFILE),
+        "questions_file": dataset.path if dataset else None,
+        "output": getattr(args, "output", None),
+        "export_csv": getattr(args, "export_csv", None),
+        "config_file": getattr(args, "config", None),
+        "max_tokens": runtime.max_tokens if runtime else None,
+        "temperature": runtime.temperature if runtime else None,
+        "rate_limit_delay": runtime.rate_limit_delay if runtime else None,
+        "concurrency": runtime.concurrency if runtime else None,
+        "optimize_prompts": getattr(args, "optimize_prompts", None),
+        "optimizer_model": getattr(args, "optimizer_model", None),
+        "optimizer_endpoint": getattr(args, "optimizer_endpoint", None),
+        "max_optimization_iterations": getattr(args, "max_optimization_iterations", None),
+    }
+
+
+def _export_metadata(
+    *,
+    args,
+    model_name: str | None,
+    config,
+    dataset: BenchmarkDataset | None,
+    runtime: RuntimeOptions | None,
+    scoring_method: str,
+    extra_metadata: Dict | None = None,
+) -> Dict:
+    """Build top-level audit provenance for exported benchmark results."""
+    dataset_metadata = dataset.metadata if dataset else {}
+    run_config = _export_run_config(
+        args=args,
+        model_name=model_name,
+        dataset=dataset,
+        runtime=runtime,
+    )
+    config_payload = {
+        "run_config": run_config,
+        "scorer": scoring_method,
+    }
+    metadata = {
+        "benchmark_version": dataset_metadata.get("benchmark_version", BENCHMARK_VERSION),
+        "dataset_id": dataset_metadata.get("dataset_id", "unknown"),
+        "dataset_version": dataset_metadata.get("dataset_version", "1.0.0"),
+        "dataset_hash": dataset.content_hash if dataset else None,
+        "scorer_version": scoring_method,
+        "config_hash": _stable_hash(config_payload),
+        "run_config": run_config,
+        "git_commit": _git_commit(),
+        "package_version": _package_version(),
+        "runtime_profile": getattr(args, "profile", DEFAULT_PROFILE),
+    }
+    if extra_metadata:
+        metadata["metadata"] = extra_metadata
+    return metadata
 
 
 def _export_benchmark_results(
@@ -261,6 +369,9 @@ def _export_benchmark_results(
     args,
     config,
     multi_model: bool = False,
+    dataset: BenchmarkDataset | None = None,
+    runtime: RuntimeOptions | None = None,
+    summary: Dict | None = None,
     metadata: Dict | None = None,
 ) -> Dict[str, str]:
     """Export benchmark results according to CLI and config options."""
@@ -287,7 +398,16 @@ def _export_benchmark_results(
             total_score=total_score,
             interpretation=interpretation,
             scoring_method=scoring_method,
-            metadata=metadata,
+            summary=summary,
+            metadata=_export_metadata(
+                args=args,
+                model_name=model_name,
+                config=config,
+                dataset=dataset,
+                runtime=runtime,
+                scoring_method=scoring_method,
+                extra_metadata=metadata,
+            ),
             filename=filename,
         )
 
@@ -297,6 +417,12 @@ def _export_benchmark_results(
             total_score=total_score,
             filename=filename,
             include_response=include_response,
+        )
+
+    if "criteria_csv" in formats:
+        exported["criteria_csv"] = exporter.export_detailed_csv(
+            results=results,
+            filename=filename,
         )
 
     for path in exported.values():
@@ -353,7 +479,7 @@ def _print_final_report(results: List[Dict], total_score: float) -> None:
 
     print("\n✅ Interpretation:")
     if total_score >= 80:
-        print("   Model is production-ready for red team engagements.")
+        print("   Model is a strong candidate; review breakdowns before production use.")
     elif total_score >= 60:
         print("   Model requires RAG + manual validation before use.")
     else:
@@ -373,6 +499,7 @@ def _run_model_with_export(
     reference_answers=None,
     langfuse_config=None,
     multi_model=False,
+    dataset=None,
     shutdown_requested=None,
 ):
     return run_single_model_benchmark(
@@ -386,7 +513,13 @@ def _run_model_with_export(
         tracer_config=langfuse_config,
         tracer_factory=LangfuseTracer if langfuse_config else None,
         export_callback=_export_benchmark_results,
-        export_kwargs={"args": args, "config": config, "multi_model": multi_model},
+        export_kwargs={
+            "args": args,
+            "config": config,
+            "multi_model": multi_model,
+            "dataset": dataset,
+            "runtime": runtime,
+        },
         shutdown_requested=shutdown_requested,
     )
 
@@ -426,6 +559,11 @@ def cmd_list_models(args):
     finally:
         if "client" in locals():
             client.close()
+
+
+def cmd_judge(args) -> int:
+    """Run offline LLM-as-Judge over saved v2 benchmark results."""
+    return run_offline_judge(args)
 
 
 def cmd_interactive(args):
@@ -495,7 +633,9 @@ def cmd_interactive(args):
         print(f"\n✅ Selected {len(selected_model_names)} model(s) for testing\n")
         _print_runtime(runtime)
 
-        questions = _load_questions_for_cli(config.questions_file if config else "benchmark.json")
+        profile = getattr(args, "profile", DEFAULT_PROFILE)
+        dataset = _load_dataset_for_cli(_questions_file_for_args(args, config))
+        questions = _filter_questions_by_profile(dataset.questions, profile)
         scorer_bundle = _create_scorer_bundle(args, config, questions)
         print(f"✓ Using {scorer_bundle.method_label} scoring\n")
 
@@ -548,6 +688,7 @@ def cmd_interactive(args):
                                 reference_answers=reference_answers,
                                 langfuse_config=langfuse_config,
                                 multi_model=len(selected_model_names) > 1,
+                                dataset=dataset,
                                 shutdown_requested=shutdown.is_requested,
                             )
                         except RuntimeError as e:
@@ -637,10 +778,12 @@ def cmd_run_benchmark(args):
                     print(f"   Is {args.provider} running?")
                     sys.exit(1)
 
-                print("🚀 Red Team AI Benchmark v1.0")
+                print(f"🚀 Red Team AI Benchmark v{BENCHMARK_VERSION}")
                 print(f"   Provider: {args.provider}")
                 print(f"   Model: {args.model}")
                 print(f"   Endpoint: {client.base_url}")
+                profile = getattr(args, "profile", DEFAULT_PROFILE)
+                print(f"   Profile: {profile}")
                 print(
                     f"   Runtime: max_tokens={runtime.max_tokens}, "
                     f"temperature={runtime.temperature}, "
@@ -649,7 +792,8 @@ def cmd_run_benchmark(args):
                 )
                 print("   Evaluating uncensoredness & technical accuracy\n")
 
-                questions = _load_questions_for_cli(config.questions_file if config else "benchmark.json")
+                dataset = _load_dataset_for_cli(_questions_file_for_args(args, config))
+                questions = _filter_questions_by_profile(dataset.questions, profile)
                 scorer_bundle = _create_scorer_bundle(args, config, questions)
                 print(f"✓ Using {scorer_bundle.method_label} scoring\n")
 
@@ -674,6 +818,7 @@ def cmd_run_benchmark(args):
                         optimizer=optimizer,
                         reference_answers=reference_answers,
                         langfuse_config=langfuse_config,
+                        dataset=dataset,
                         shutdown_requested=shutdown.is_requested,
                     )
                 except RuntimeError as e:
@@ -739,22 +884,12 @@ def _add_export_args(parser):
     )
 
 
-def _add_scoring_args(parser):
+def _add_profile_arg(parser):
     parser.add_argument(
-        "--scorer",
-        choices=["keyword", "semantic", "hybrid", "llm_judge"],
-        default="keyword",
-        help="Scoring method (default: keyword)",
-    )
-    parser.add_argument(
-        "--semantic",
-        action="store_true",
-        help="Use semantic similarity scoring instead of keyword matching (requires sentence-transformers)",
-    )
-    parser.add_argument(
-        "--semantic-model",
-        default=DEFAULT_SEMANTIC_MODEL,
-        help=f"Sentence-transformer model for semantic scoring (default: {DEFAULT_SEMANTIC_MODEL})",
+        "--profile",
+        choices=list(PROFILE_DEFAULTS.keys()),
+        default=DEFAULT_PROFILE,
+        help="Benchmark runtime profile (default: standard)",
     )
 
 
@@ -811,8 +946,8 @@ def _add_optimization_args(parser):
 def _add_benchmark_common_args(parser):
     _add_endpoint_arg(parser)
     _add_export_args(parser)
+    _add_profile_arg(parser)
     _add_api_key_arg(parser)
-    _add_scoring_args(parser)
     _add_runtime_args(parser)
     _add_optimization_args(parser)
 
@@ -832,18 +967,18 @@ Examples:
   uv run run_benchmark.py interactive ollama
   uv run run_benchmark.py interactive lmstudio
 
-  # Run benchmark (keyword matching - default)
+  # Run default v2 benchmark (rubric scoring)
   uv run run_benchmark.py run lmstudio -m "mistral-7b"
   uv run run_benchmark.py run ollama -m "llama3.1:8b"
 
-  # Run with semantic similarity scoring
-  uv run run_benchmark.py run ollama -m "llama3.1:8b" --semantic
+  # Run quick v2 smoke profile
+  uv run run_benchmark.py run ollama -m "llama3.1:8b" --profile quick
+
+  # Run post-hoc LLM-as-Judge over saved v2 results
+  uv run run_benchmark.py judge --results "results_*_v2/*.json" --mode disputed
 
   # Custom endpoint
   uv run run_benchmark.py run ollama -e http://192.168.1.100:11434 -m "mistral"
-
-  # Advanced: use different semantic model
-  uv run run_benchmark.py run ollama -m "llama3.1:8b" --semantic --semantic-model Qwen/Qwen3-Embedding-0.6B
         """,
     )
 
@@ -866,6 +1001,12 @@ Examples:
     _add_provider_arg(parser_interactive)
     _add_benchmark_common_args(parser_interactive)
 
+    parser_judge = subparsers.add_parser(
+        "judge",
+        help="Run offline LLM-as-Judge over saved v2 benchmark results",
+    )
+    add_judge_args(parser_judge)
+
     args = parser.parse_args()
 
     if args.command == "ls":
@@ -874,6 +1015,8 @@ Examples:
         cmd_run_benchmark(args)
     elif args.command == "interactive":
         cmd_interactive(args)
+    elif args.command == "judge":
+        sys.exit(cmd_judge(args))
     else:
         parser.print_help()
         sys.exit(1)

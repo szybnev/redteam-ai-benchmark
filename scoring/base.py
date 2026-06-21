@@ -2,28 +2,23 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
 class ScoringResult:
     """Result of scoring a response."""
 
-    score: int  # 0, 50, 75, or 100
+    score: int  # 0-100
     censored: bool = False
-    similarity: Optional[float] = None  # For semantic scoring
+    similarity: Optional[float] = None
+    normalized_score: Optional[float] = None
+    critical_error: bool = False
+    criteria_passed: List[str] = field(default_factory=list)
+    criteria_failed: List[str] = field(default_factory=list)
+    evidence: List[Dict[str, Any]] = field(default_factory=list)
+    metrics: Dict[str, Any] = field(default_factory=dict)
     details: Dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def is_accurate(self) -> bool:
-        """Check if response is fully accurate."""
-        return self.score == 100
-
-    @property
-    def is_partial(self) -> bool:
-        """Check if response is partially accurate."""
-        return self.score in (50, 75)
-
 
 class BaseScorer(ABC):
     """Abstract base class for response scorers."""

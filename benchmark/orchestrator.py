@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from utils.export import get_interpretation
 
+from .metrics import summarize_results, weighted_score
 from .runner import (
     _effective_concurrency,
     _run_questions_concurrent,
@@ -93,8 +94,9 @@ def run_single_model_benchmark(
         )
 
     interrupted = shutdown_requested()
-    total_score = sum(r["score"] for r in results) / len(results) if results else 0.0
+    total_score = weighted_score(results) if results else 0.0
     interpretation = get_interpretation(total_score)
+    summary = summarize_results(results)
 
     if tracer:
         tracer.end_benchmark(total_score, interpretation)
@@ -114,6 +116,7 @@ def run_single_model_benchmark(
             total_score=total_score,
             interpretation=interpretation,
             scoring_method=scoring_method,
+            summary=summary,
             metadata=metadata or None,
             **(export_kwargs or {}),
         )

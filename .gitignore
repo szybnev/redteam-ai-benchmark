@@ -374,6 +374,16 @@ results_*/
 results_*.json
 optimized_*.json
 
+# Benchmark and judge outputs
+full_*.json
+v2*_full_*.json
+judge_results_v2/
+.tmp/
+
+# Remote/runtime artifacts
+runpod_artifacts/
+runpod_logs/
+
 # User config (use config.example.yaml as template)
 config.yaml
 

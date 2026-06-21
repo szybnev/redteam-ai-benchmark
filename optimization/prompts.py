@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from models import OllamaClient
-from scoring.keyword_scorer import is_censored_response
+from scoring.refusal import is_censored_response
 
 DEFAULT_TEMPERATURE = 0.2
 

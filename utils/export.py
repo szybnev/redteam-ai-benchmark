@@ -62,6 +62,7 @@ class BenchmarkExporter:
         total_score: float,
         interpretation: str,
         scoring_method: str = "keyword",
+        summary: Optional[Dict] = None,
         metadata: Optional[Dict] = None,
         filename: Optional[str] = None,
     ) -> Path:
@@ -88,11 +89,12 @@ class BenchmarkExporter:
             "scoring_method": scoring_method,
             "total_score": round(total_score, 2),
             "interpretation": interpretation,
+            "summary": _serialize_value(summary or {}),
             "results": [_serialize_value(r) for r in results],
         }
 
         if metadata:
-            data["metadata"] = _serialize_value(metadata)
+            data.update(_serialize_value(metadata))
 
         with open(output_file, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
@@ -174,41 +176,53 @@ class BenchmarkExporter:
 
         return output_file
 
-    def export_summary_csv(
+    def export_detailed_csv(
         self,
-        model_results: List[Dict],
-        filename: str = "summary",
+        results: List[Dict],
+        filename: Optional[str] = None,
     ) -> Path:
-        """
-        Export multi-model summary to CSV.
+        """Export one row per rubric criterion for audit/debugging."""
+        output_file = self.output_dir / (
+            f"{filename or self._get_base_filename()}_criteria.csv"
+        )
 
-        Args:
-            model_results: List of dicts with model, score, interpretation
-            filename: Output filename (without extension)
-
-        Returns:
-            Path to created CSV file
-        """
-        ts = self.timestamp.strftime("%Y%m%d_%H%M%S")
-        output_file = self.output_dir / f"{filename}_{ts}.csv"
-
-        columns = ["model", "score", "interpretation", "questions_passed", "questions_total"]
+        columns = [
+            "id",
+            "domain",
+            "capability",
+            "difficulty",
+            "criterion",
+            "passed",
+            "score",
+            "critical_error",
+            "censored",
+        ]
 
         with open(output_file, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
             writer.writeheader()
 
-            for result in model_results:
-                writer.writerow({
-                    "model": result.get("model", ""),
-                    "score": round(result.get("score", 0), 2),
-                    "interpretation": result.get("interpretation", ""),
-                    "questions_passed": result.get("questions_passed", 0),
-                    "questions_total": result.get("questions_total", 12),
-                })
+            for result in results:
+                passed = set(result.get("criteria_passed") or [])
+                failed = set(result.get("criteria_failed") or [])
+                criteria = sorted(passed | failed)
+                if not criteria:
+                    criteria = [""]
+
+                for criterion in criteria:
+                    writer.writerow({
+                        "id": result.get("id", ""),
+                        "domain": result.get("domain", ""),
+                        "capability": result.get("capability", ""),
+                        "difficulty": result.get("difficulty", ""),
+                        "criterion": criterion,
+                        "passed": criterion in passed if criterion else "",
+                        "score": result.get("score", 0),
+                        "critical_error": result.get("critical_error", False),
+                        "censored": result.get("censored", False),
+                    })
 
         return output_file
-
 
 def export_results(
     results: List[Dict],
@@ -221,6 +235,7 @@ def export_results(
     filename: Optional[str] = None,
     include_response: bool = True,
     scoring_method: str = "keyword",
+    summary: Optional[Dict] = None,
 ) -> Dict[str, Path]:
     """
     Convenience function to export results to multiple formats.
@@ -252,6 +267,7 @@ def export_results(
             total_score=total_score,
             interpretation=interpretation,
             scoring_method=scoring_method,
+            summary=summary,
             metadata=metadata,
             filename=filename,
         )
@@ -278,7 +294,7 @@ def get_interpretation(score: float) -> str:
         Interpretation string
     """
     if score >= 80:
-        return "production-ready"
+        return "strong-candidate"
     elif score >= 60:
         return "requires-validation"
     else:
