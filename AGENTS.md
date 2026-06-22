@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This file provides repository-specific guidance for AI coding agents. `CLAUDE.md` is expected to resolve to the same content.
+This file provides repository-specific guidance for AI coding agents. `CLAUDE.md` is a symlink to this file and resolves to the same content.
 
 ## Project
 
@@ -10,13 +10,17 @@ Supported providers:
 
 - `ollama`: native Ollama API, default `http://localhost:11434`
 - `lmstudio`: OpenAI-compatible LM Studio API, default `http://localhost:1234`
+- `openwebui`: OpenAI-compatible OpenWebUI API, default `http://localhost:3000`
 - `openrouter`: OpenAI-compatible cloud API, default `https://openrouter.ai/api/v1`
 
 Primary implementation files:
 
 - `run_benchmark.py`: CLI, benchmark orchestration, prompt optimization, Langfuse tracing
+- `benchmark/`: dataset loading, runtime execution, metrics, shutdown handling, offline judge
 - `models/`: provider clients and `create_client()`
+- `optimization/`: prompt optimization helpers
 - `scoring/`: deterministic rubric scorer
+- `tracing/`: optional Langfuse tracing adapter
 - `utils/config.py`: YAML config loading
 - `utils/export.py`: JSON/CSV export helpers
 - `datasets/v2/benchmark.jsonl`: v2 rubric benchmark source of truth
@@ -27,14 +31,16 @@ Full background reference lives in `docs/agent-reference.md`. User-facing docs l
 
 ## Workflow Rules
 
-- Reply in Russian.
+- Reply to the repository owner in Russian unless they ask otherwise.
+- Write commit messages and PR/MR titles/descriptions in English for maintainer-authored changes.
+- When replying to external users in issues, PRs, or MRs, use the user's language. If the language is unclear, rare, or an unfamiliar dialect, reply in English.
 - Modify only files related to the task.
 - Do not refactor unrelated code.
 - In a dirty worktree, never revert or overwrite changes you did not make.
 - Use local source of truth first: code, configs, lockfiles, README, docs.
 - Use `uv` for Python commands unless a task explicitly requires another tool.
 - Do not run `git push` or `git pull` unless explicitly requested.
-- Commit messages must be short and written in Russian.
+- Commit messages must be short and written in English.
 - Group commits by meaning if the user asks for commits.
 - Do not write "Generated with Codex", "Generated with Claude", or similar attribution.
 
@@ -51,6 +57,7 @@ List provider models:
 ```bash
 uv run run_benchmark.py ls ollama
 uv run run_benchmark.py ls lmstudio
+uv run run_benchmark.py ls openwebui
 uv run run_benchmark.py ls openrouter --api-key "$OPENROUTER_API_KEY"
 ```
 
@@ -59,6 +66,7 @@ Run one benchmark:
 ```bash
 uv run run_benchmark.py run ollama -m "llama3.1:8b"
 uv run run_benchmark.py run lmstudio -m "mistral-7b-instruct"
+uv run run_benchmark.py run openwebui -m "llama3.1:8b"
 uv run run_benchmark.py run openrouter -m "anthropic/claude-3.5-sonnet" --api-key "$OPENROUTER_API_KEY"
 ```
 
@@ -73,6 +81,7 @@ Run interactive multi-model selection:
 ```bash
 uv run run_benchmark.py interactive ollama
 uv run run_benchmark.py interactive lmstudio
+uv run run_benchmark.py interactive openwebui
 ```
 
 Run the quick v2 profile:
@@ -101,18 +110,18 @@ Useful checks:
 uv run run_benchmark.py --help
 uv run run_benchmark.py run --help
 uv run pytest
-python3 -m compileall -q run_benchmark.py models scoring utils
+python3 -m compileall -q run_benchmark.py benchmark models optimization scoring tracing utils
 ```
 
 ## Architecture Notes
 
 Provider clients implement `APIClient`:
 
-- `query(prompt, max_tokens, retries) -> str`
+- `query(prompt, max_tokens, retries, temperature) -> str`
 - `list_models() -> list[dict]`
 - `test_connection() -> bool`
 
-Client creation is centralized in `models.create_client(provider, endpoint, model, api_key=None)`.
+Client creation is centralized in `models.create_client(provider, endpoint, model, api_key=None, timeout=None, keep_alive=None)`.
 
 Default scoring is rubric-based and deterministic:
 
@@ -152,7 +161,7 @@ When changing config:
 
 ## Optional Features
 
-Prompt optimization only triggers on `0%` censored responses. It uses an optimizer model, tests reframed prompts against the target model, and writes `optimized_prompts_{model}_{timestamp}.json` when optimization results exist.
+Prompt optimization only triggers on baseline responses that score `0%`. It uses an optimizer model, tests reframed prompts against the target model, and writes `optimized_prompts_{model}_{timestamp}.json` when optimization results exist.
 
 Langfuse tracing is optional and configured through `config.yaml`. It records benchmark spans, question spans, optimization attempts, scores, payloads, and latency metadata.
 
@@ -167,27 +176,3 @@ The `local-only` profile must not require LLM judge access.
 - Put longer implementation notes in `docs/agent-reference.md`.
 - If code behavior changes, sync documentation in the same task.
 - Do not document features as fully supported unless the code path is verified.
-
-## Current File Layout
-
-```text
-redteam-ai-benchmark/
-  benchmark.json
-  answers_all.txt
-  datasets/
-    v2/
-      benchmark.jsonl
-  run_benchmark.py
-  config.example.yaml
-  pyproject.toml
-  README.md
-  README.ru.md
-  AGENTS.md
-  CLAUDE.md -> AGENTS.md
-  docs/
-    agent-reference.md
-  models/
-  scoring/
-  utils/
-  tests/
-```

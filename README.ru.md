@@ -214,6 +214,11 @@ JSON export содержит результаты модели, evidence по ru
   "dataset_hash": "...",
   "scorer_version": "rubric",
   "config_hash": "...",
+  "run_config": {
+    "provider": "ollama",
+    "model": "llama3.1:8b",
+    "profile": "standard"
+  },
   "git_commit": "...",
   "package_version": "2.1.0",
   "runtime_profile": "standard",
@@ -231,11 +236,11 @@ JSON export содержит результаты модели, evidence по ru
 }
 ```
 
-CSV содержит строки по вопросам. `criteria_csv` добавляет отдельную строку на каждый passed или failed rubric criterion.
+CSV содержит строки по вопросам плюс строку `TOTAL`. `criteria_csv` добавляет отдельную строку на каждый passed или failed rubric criterion.
 
 ## Prompt Optimization
 
-Prompt optimization остаётся отдельным optional режимом и не смешивается с base-model score. Он запускается только для `0%` censored responses при `--optimize-prompts` и пишет `optimized_prompts_{model}_{timestamp}.json`.
+Prompt optimization остаётся отдельным optional режимом и не смешивается с base-model score. Он запускается только для baseline responses с оценкой `0%` при `--optimize-prompts` и пишет `optimized_prompts_{model}_{timestamp}.json`.
 
 ```bash
 uv run run_benchmark.py run ollama -m "llama3.1:8b" \
@@ -253,7 +258,7 @@ Optimized score нельзя смешивать с base model capability compari
 uv run run_benchmark.py --help
 uv run run_benchmark.py run --help
 uv run pytest
-python3 -m compileall -q run_benchmark.py benchmark models scoring utils
+python3 -m compileall -q run_benchmark.py benchmark models optimization scoring tracing utils
 ```
 
 ## Участие

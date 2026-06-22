@@ -29,7 +29,7 @@ export:
   output_dir: ./results
   include_response: true
 
-# Prompt Optimization (for censored responses)
+# Prompt Optimization (for baseline responses that score 0%)
 optimization:
   enabled: false
   optimizer_model: llama3.3:70b

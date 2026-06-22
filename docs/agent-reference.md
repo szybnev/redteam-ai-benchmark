@@ -111,6 +111,7 @@ JSON exports include top-level audit provenance:
 - `dataset_hash`
 - `scorer_version`
 - `config_hash`
+- `run_config`
 - `git_commit`
 - `package_version`
 - `runtime_profile`
@@ -127,13 +128,13 @@ When adding a question:
 4. Keep `rubric` non-empty and criteria weights positive.
 5. Include fatal-error rules for common dangerous false claims.
 6. Add or update calibration fixtures when scorer behavior changes.
-7. Run `uv run pytest` and `python3 -m compileall -q run_benchmark.py benchmark models scoring utils`.
+7. Run `uv run pytest` and `python3 -m compileall -q run_benchmark.py benchmark models optimization scoring tracing utils`.
 
 Do not add large batches of questions without rubric criteria.
 
 ## Optional Features
 
-Prompt optimization remains separate from base-model scoring. Do not mix optimized results into base model comparison tables.
+Prompt optimization remains separate from base-model scoring. It runs only after a baseline response scores `0%`; do not mix optimized results into base model comparison tables.
 
 Langfuse tracing is optional and should not be required for local or CI validation.
 

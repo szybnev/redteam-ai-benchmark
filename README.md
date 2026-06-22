@@ -214,6 +214,11 @@ JSON export includes model results, per-question rubric evidence, aggregate summ
   "dataset_hash": "...",
   "scorer_version": "rubric",
   "config_hash": "...",
+  "run_config": {
+    "provider": "ollama",
+    "model": "llama3.1:8b",
+    "profile": "standard"
+  },
   "git_commit": "...",
   "package_version": "2.1.0",
   "runtime_profile": "standard",
@@ -231,11 +236,11 @@ JSON export includes model results, per-question rubric evidence, aggregate summ
 }
 ```
 
-CSV output contains per-question rows. `criteria_csv` adds one row per passed or failed rubric criterion.
+CSV output contains per-question rows plus a `TOTAL` row. `criteria_csv` adds one row per passed or failed rubric criterion.
 
 ## Prompt Optimization
 
-Prompt optimization remains optional and separate from base-model scoring. It only runs for `0%` censored responses when `--optimize-prompts` is enabled, and it writes `optimized_prompts_{model}_{timestamp}.json`.
+Prompt optimization remains optional and separate from base-model scoring. It only runs for baseline responses that score `0%` when `--optimize-prompts` is enabled, and it writes `optimized_prompts_{model}_{timestamp}.json`.
 
 ```bash
 uv run run_benchmark.py run ollama -m "llama3.1:8b" \
@@ -253,7 +258,7 @@ Useful checks:
 uv run run_benchmark.py --help
 uv run run_benchmark.py run --help
 uv run pytest
-python3 -m compileall -q run_benchmark.py benchmark models scoring utils
+python3 -m compileall -q run_benchmark.py benchmark models optimization scoring tracing utils
 ```
 
 ## Contributing
