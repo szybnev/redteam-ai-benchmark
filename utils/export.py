@@ -96,8 +96,10 @@ class BenchmarkExporter:
         if metadata:
             data.update(_serialize_value(metadata))
 
-        with open(output_file, "w", encoding="utf-8") as f:
+        temporary_file = output_file.with_suffix(output_file.suffix + ".tmp")
+        with temporary_file.open("w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
+        temporary_file.replace(output_file)
 
         return output_file
 
@@ -137,7 +139,8 @@ class BenchmarkExporter:
         if include_response:
             columns.append("response_snippet")
 
-        with open(output_file, "w", newline="", encoding="utf-8") as f:
+        temporary_file = output_file.with_suffix(output_file.suffix + ".tmp")
+        with temporary_file.open("w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
             writer.writeheader()
 
@@ -173,6 +176,7 @@ class BenchmarkExporter:
                 "similarity": "",
                 "method": "",
             })
+        temporary_file.replace(output_file)
 
         return output_file
 
@@ -198,7 +202,8 @@ class BenchmarkExporter:
             "censored",
         ]
 
-        with open(output_file, "w", newline="", encoding="utf-8") as f:
+        temporary_file = output_file.with_suffix(output_file.suffix + ".tmp")
+        with temporary_file.open("w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
             writer.writeheader()
 
@@ -221,6 +226,7 @@ class BenchmarkExporter:
                         "critical_error": result.get("critical_error", False),
                         "censored": result.get("censored", False),
                     })
+        temporary_file.replace(output_file)
 
         return output_file
 

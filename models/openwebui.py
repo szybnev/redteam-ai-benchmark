@@ -7,7 +7,7 @@ from typing import Dict, List, Optional
 
 import requests
 
-from .base import APIClient
+from .base import APIClient, ProviderRequestError, ProviderResponse
 
 
 class OpenWebUIClient(APIClient):
@@ -53,7 +53,8 @@ class OpenWebUIClient(APIClient):
         max_tokens: int = 768,
         retries: int = 3,
         temperature: float = 0.2,
-    ) -> str:
+        seed: int | None = None,
+    ) -> ProviderResponse:
         """Query OpenWebUI API with retry logic."""
 
         url = f"{self.base_url}/api/chat/completions"
@@ -64,6 +65,8 @@ class OpenWebUIClient(APIClient):
             "max_tokens": max_tokens,
             "stream": False,
         }
+        if seed is not None:
+            payload["seed"] = seed
 
         for attempt in range(retries):
             try:
@@ -74,19 +77,31 @@ class OpenWebUIClient(APIClient):
                     timeout=self.timeout,
                 )
                 response.raise_for_status()
-                return response.json()["choices"][0]["message"]["content"]
+                data = response.json()
+                choice = data["choices"][0]
+                return ProviderResponse(
+                    choice["message"]["content"],
+                    finish_reason=choice.get("finish_reason"),
+                    usage=data.get("usage"),
+                    response_id=data.get("id"),
+                    actual_model=data.get("model", self.model_name),
+                )
 
             except requests.exceptions.Timeout:
                 print(f"   Timeout on attempt {attempt + 1}/{retries}")
                 if attempt == retries - 1:
-                    raise RuntimeError(
-                        f"API timeout after {retries} attempts"
+                    raise ProviderRequestError(
+                        f"API timeout after {retries} attempts",
+                        attempts=attempt + 1,
+                        error_type="timeout",
                     ) from None
                 time.sleep(2**attempt)
 
             except requests.exceptions.ConnectionError as e:
-                raise RuntimeError(
-                    f"Cannot connect to OpenWebUI at {self.base_url}. Is it running?"
+                raise ProviderRequestError(
+                    f"Cannot connect to OpenWebUI at {self.base_url}. Is it running?",
+                    attempts=attempt + 1,
+                    error_type="connection",
                 ) from e
 
             except requests.exceptions.HTTPError as e:
@@ -96,16 +111,30 @@ class OpenWebUIClient(APIClient):
                     ) from e
                 if e.response.status_code == 429:
                     print("   Rate limited, waiting...")
+                    if attempt == retries - 1:
+                        raise ProviderRequestError(
+                            "Rate limit retry budget exhausted",
+                            attempts=attempt + 1,
+                            error_type="rate_limit",
+                        ) from e
                     time.sleep(5)
                     continue
-                raise RuntimeError(
-                    f"API error {e.response.status_code}: {e.response.text}"
+                raise ProviderRequestError(
+                    f"API error {e.response.status_code}: {e.response.text}",
+                    attempts=attempt + 1,
+                    error_type="http",
                 ) from e
 
             except (KeyError, json.JSONDecodeError) as e:
-                raise RuntimeError(f"Invalid API response format: {e}") from e
+                raise ProviderRequestError(
+                    f"Invalid API response format: {e}",
+                    attempts=attempt + 1,
+                    error_type="invalid_response",
+                ) from e
 
-        raise RuntimeError("Max retries exceeded")
+        raise ProviderRequestError(
+            "Max retries exceeded", attempts=retries, error_type="retry_exhausted"
+        )
 
     def list_models(self) -> List[Dict]:
         """List available models from OpenWebUI."""

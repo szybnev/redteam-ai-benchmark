@@ -3,7 +3,7 @@
 import os
 from typing import Dict, List, Optional
 
-from .base import APIClient
+from .base import APIClient, ProviderRequestError, ProviderResponse
 
 # Optional httpx support
 try:
@@ -99,7 +99,8 @@ class OpenRouterClient(APIClient):
         max_tokens: int = 768,
         retries: int = 3,
         temperature: float = 0.2,
-    ) -> str:
+        seed: int | None = None,
+    ) -> ProviderResponse:
         """
         Query OpenRouter API.
 
@@ -117,20 +118,42 @@ class OpenRouterClient(APIClient):
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        if seed is not None:
+            payload["seed"] = seed
 
         try:
             data = self._make_request(payload, retries=retries)
-            return data["choices"][0]["message"]["content"]
+            choice = data["choices"][0]
+            return ProviderResponse(
+                choice["message"]["content"],
+                finish_reason=choice.get("finish_reason"),
+                usage=data.get("usage"),
+                response_id=data.get("id"),
+                actual_model=data.get("model", self.model_name),
+                metadata={"provider": data.get("provider")},
+            )
         except httpx.HTTPStatusError as e:
-            raise RuntimeError(
-                f"OpenRouter API error {e.response.status_code}: {e.response.text}"
+            raise ProviderRequestError(
+                f"OpenRouter API error {e.response.status_code}: {e.response.text}",
+                attempts=retries,
+                error_type="http",
             ) from e
         except httpx.ConnectError as e:
-            raise RuntimeError(
-                f"Cannot connect to OpenRouter at {self.base_url}"
+            raise ProviderRequestError(
+                f"Cannot connect to OpenRouter at {self.base_url}",
+                attempts=retries,
+                error_type="connection",
             ) from e
         except KeyError as e:
-            raise RuntimeError(f"Invalid API response format: {e}") from e
+            raise ProviderRequestError(
+                f"Invalid API response format: {e}",
+                attempts=retries,
+                error_type="invalid_response",
+            ) from e
+        except RuntimeError as e:
+            raise ProviderRequestError(
+                str(e), attempts=retries, error_type="retry_exhausted"
+            ) from e
 
     def list_models(self) -> List[Dict]:
         """

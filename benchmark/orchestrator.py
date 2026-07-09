@@ -1,7 +1,8 @@
 """Single-model benchmark orchestration."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, List, Optional
+from uuid import uuid4
 
 from utils.export import get_interpretation
 
@@ -65,38 +66,62 @@ def run_single_model_benchmark(
         optimizer_enabled=optimizer is not None,
         tracer_enabled=tracer is not None,
     )
-    runtime.concurrency = effective_concurrency
-
-    if effective_concurrency > 1:
-        results = _run_questions_concurrent(
-            questions,
-            client,
-            scorer_func,
+    results = []
+    optimization_results = []
+    base_run_id = runtime.run_id or uuid4().hex
+    for repeat_index in range(runtime.repeats):
+        repeat_runtime = replace(
             runtime,
-            scorer=scorer,
-            scorer_details=scorer_details,
-            shutdown_requested=shutdown_requested,
+            concurrency=effective_concurrency,
+            repeat_index=repeat_index,
+            seed=runtime.seed + repeat_index if runtime.seed is not None else None,
+            run_id=f"{base_run_id}-r{repeat_index}",
         )
-        optimization_results = []
-    else:
-        results, optimization_results = _run_questions_sequential(
-            questions=questions,
-            client=client,
-            scorer_func=scorer_func,
-            runtime=runtime,
-            model_name=model_name,
-            optimizer=optimizer,
-            reference_answers=reference_answers,
-            tracer=tracer,
-            scorer=scorer,
-            scorer_details=scorer_details,
-            shutdown_requested=shutdown_requested,
-        )
+        if effective_concurrency > 1:
+            repeat_results = _run_questions_concurrent(
+                questions,
+                client,
+                scorer_func,
+                repeat_runtime,
+                scorer=scorer,
+                scorer_details=scorer_details,
+                shutdown_requested=shutdown_requested,
+            )
+            repeat_optimization_results = []
+        else:
+            repeat_results, repeat_optimization_results = _run_questions_sequential(
+                questions=questions,
+                client=client,
+                scorer_func=scorer_func,
+                runtime=repeat_runtime,
+                model_name=model_name,
+                optimizer=optimizer,
+                reference_answers=reference_answers,
+                tracer=tracer,
+                scorer=scorer,
+                scorer_details=scorer_details,
+                shutdown_requested=shutdown_requested,
+            )
+        results.extend(repeat_results)
+        optimization_results.extend(repeat_optimization_results)
+        if shutdown_requested():
+            break
 
     interrupted = shutdown_requested()
+    expected_observations = len(questions) * runtime.repeats
     total_score = weighted_score(results) if results else 0.0
-    interpretation = get_interpretation(total_score)
-    summary = summarize_results(results)
+    has_failures = any(result.get("status", "ok") != "ok" for result in results)
+    has_skipped = len(results) < expected_observations
+    summary = summarize_results(results, expected_total=expected_observations)
+    repeat_statistics = summary.get("repeat_statistics") or {}
+    ci95 = repeat_statistics.get("ci95") or [total_score, total_score]
+    crosses_threshold = get_interpretation(ci95[0]) != get_interpretation(ci95[1])
+    if interrupted or has_failures or has_skipped:
+        interpretation = "incomplete"
+    elif crosses_threshold:
+        interpretation = "uncertain"
+    else:
+        interpretation = get_interpretation(total_score)
 
     if tracer:
         tracer.end_benchmark(total_score, interpretation)
@@ -107,8 +132,21 @@ def run_single_model_benchmark(
         if interrupted:
             metadata = {
                 "interrupted": True,
-                "completed_questions": len(results),
-                "total_questions": len(questions),
+                "completed_questions": summary["run_coverage"]["completed"],
+                "failed_questions": summary["run_coverage"]["failed"],
+                "skipped_questions": summary["run_coverage"]["skipped"],
+                "total_questions": expected_observations,
+            }
+        elif has_failures:
+            metadata = {
+                "incomplete": True,
+                "completed_questions": sum(
+                    result.get("status", "ok") == "ok" for result in results
+                ),
+                "failed_questions": sum(
+                    result.get("status", "ok") != "ok" for result in results
+                ),
+                "total_questions": expected_observations,
             }
         exported = export_callback(
             results=results,
@@ -116,6 +154,10 @@ def run_single_model_benchmark(
             total_score=total_score,
             interpretation=interpretation,
             scoring_method=scoring_method,
+            scorer_version=(
+                getattr(scorer, "VERSION", None)
+                or scorer_details.get("scorer_version")
+            ),
             summary=summary,
             metadata=metadata or None,
             **(export_kwargs or {}),

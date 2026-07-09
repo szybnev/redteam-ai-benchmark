@@ -3,7 +3,7 @@
 import importlib.util
 from typing import Optional
 
-from .base import APIClient
+from .base import APIClient, ProviderRequestError, ProviderResponse
 from .lmstudio import LMStudioClient
 from .ollama import OllamaClient
 from .openwebui import OpenWebUIClient
@@ -21,6 +21,8 @@ else:
 
 __all__ = [
     "APIClient",
+    "ProviderResponse",
+    "ProviderRequestError",
     "LMStudioClient",
     "OllamaClient",
     "OpenWebUIClient",

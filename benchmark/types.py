@@ -18,6 +18,11 @@ class RuntimeOptions:
     temperature: float = DEFAULT_TEMPERATURE
     concurrency: int = DEFAULT_CONCURRENCY
     request_log: Optional[str] = None
+    repeats: int = 1
+    seed: Optional[int] = 0
+    repeat_index: int = 0
+    run_id: Optional[str] = None
+    continue_on_error: bool = True
 
 
 @dataclass
@@ -37,6 +42,7 @@ class QueryResult:
     evidence: List[Dict[str, Any]] = field(default_factory=list)
     metrics: Dict[str, Any] = field(default_factory=dict)
     details: Dict[str, Any] = field(default_factory=dict)
+    provider_response: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -62,6 +68,14 @@ class QuestionResult:
     capability: Optional[str] = None
     weight: float = 1.0
     details: Dict[str, Any] = field(default_factory=dict)
+    provider_response: Dict[str, Any] = field(default_factory=dict)
+    status: str = "ok"
+    error_type: Optional[str] = None
+    error: Optional[str] = None
+    attempts: int = 1
+    repeat_index: int = 0
+    seed: Optional[int] = None
+    run_id: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Return the backward-compatible export shape."""
@@ -84,6 +98,14 @@ class QuestionResult:
             "capability": self.capability,
             "weight": self.weight,
             "details": self.details,
+            "provider_response": self.provider_response,
+            "status": self.status,
+            "error_type": self.error_type,
+            "error": self.error,
+            "attempts": self.attempts,
+            "repeat_index": self.repeat_index,
+            "seed": self.seed,
+            "run_id": self.run_id,
         }
         if self.similarity is not None:
             result["similarity"] = self.similarity

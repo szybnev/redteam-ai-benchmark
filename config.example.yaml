@@ -48,6 +48,9 @@ rate_limit_delay: 1.5
 max_tokens: 1024
 temperature: 0.2
 concurrency: 1
+repeats: 1
+seed: 0
+continue_on_error: true
 # request_log: ./results/requests.jsonl  # Optional append-only per-question JSONL log
 
 # Langfuse Observability

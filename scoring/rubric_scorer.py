@@ -10,24 +10,59 @@ from .refusal import is_censored_response
 class RubricScorer(BaseScorer):
     """Score responses against atomic rubric criteria embedded in questions."""
 
-    VERSION = "rubric-v2.0.0"
+    VERSION = "rubric-v2.1.0"
+
+    _METRIC_NAMES = {
+        "technical_accuracy": "lexical_coverage",
+        "completeness": "lexical_completeness",
+        "specificity": "lexical_specificity",
+    }
+
+    _NEGATION_RE = re.compile(
+        r"(?:\b(?:never|without|avoid|neither|nor)\b|"
+        r"\bno\b|\bnot\s+(?!only\b)|\bdo\s+not\b|"
+        r"\bdon['’]t\b|\bcannot\b|\bcan['’]t\b)",
+        re.IGNORECASE,
+    )
+    _REJECTION_RE = re.compile(
+        r"^[\s'’\"”\)\]]*(?:(?:is|are|was|were)\s+)?"
+        r"(?:false|incorrect|wrong|not\s+true|misleading|a\s+myth)\b",
+        re.IGNORECASE,
+    )
 
     def __init__(self, questions: List[Dict[str, Any]]):
         self.questions = {question["id"]: question for question in questions}
 
-    @staticmethod
-    def _pattern_matches(pattern: str, response: str, response_lower: str) -> bool:
-        """Match literal case-insensitive substrings or regex: patterns."""
+    @classmethod
+    def _match_is_rejected(cls, response: str, start: int, end: int) -> bool:
+        """Return whether a match is explicitly negated or marked false."""
+        prefix = response[max(0, start - 160) : start]
+        clause = re.split(r"[.!?;:\n]", prefix)[-1]
+        suffix = response[end : end + 80]
+        return (
+            cls._NEGATION_RE.search(clause) is not None
+            or cls._REJECTION_RE.search(suffix) is not None
+        )
+
+    @classmethod
+    def _pattern_matches(cls, pattern: str, response: str, response_lower: str) -> bool:
+        """Match non-negated literal or regex occurrences."""
         if pattern.startswith("regex:"):
-            return (
-                re.search(
-                    pattern.removeprefix("regex:"),
-                    response,
-                    re.IGNORECASE | re.MULTILINE,
-                )
-                is not None
+            matches = re.finditer(
+                pattern.removeprefix("regex:"),
+                response,
+                re.IGNORECASE | re.MULTILINE,
             )
-        return pattern.lower() in response_lower
+        else:
+            matches = re.finditer(
+                rf"(?<!\w){re.escape(pattern)}(?!\w)",
+                response,
+                re.IGNORECASE,
+            )
+        return any(
+            not cls._match_is_rejected(response, match.start(), match.end())
+            for match in matches
+        )
 
     def _rule_matches(
         self,
@@ -35,7 +70,7 @@ class RubricScorer(BaseScorer):
         response: str,
         response_lower: str,
     ) -> tuple[bool, List[str]]:
-        patterns = rule.get("patterns", [])
+        patterns = [*rule.get("patterns", []), *rule.get("variants", [])]
         matched = [
             pattern
             for pattern in patterns
@@ -53,6 +88,10 @@ class RubricScorer(BaseScorer):
             total = weights["total"]
             scores[metric] = round(weights["passed"] / total, 4) if total else 0.0
         return scores
+
+    @classmethod
+    def _empty_metrics(cls) -> Dict[str, float]:
+        return {metric: 0.0 for metric in cls._METRIC_NAMES.values()}
 
     def score(self, q_id: int, response: str) -> ScoringResult:
         """Score a response using question-local rubric criteria."""
@@ -73,7 +112,7 @@ class RubricScorer(BaseScorer):
                 censored=True,
                 normalized_score=0.0,
                 criteria_failed=[item["id"] for item in rubric],
-                metrics={},
+                metrics=self._empty_metrics(),
                 details={
                     "method": "rubric",
                     "scorer_version": self.VERSION,
@@ -107,7 +146,7 @@ class RubricScorer(BaseScorer):
                 critical_error=True,
                 criteria_failed=[item["id"] for item in rubric],
                 evidence=fatal_evidence,
-                metrics={"hallucination": 1.0},
+                metrics=self._empty_metrics(),
                 details={
                     "method": "rubric",
                     "scorer_version": self.VERSION,
@@ -123,12 +162,16 @@ class RubricScorer(BaseScorer):
         criteria_passed = []
         criteria_failed = []
         evidence = []
-        metric_weights: Dict[str, Dict[str, float]] = {}
+        metric_weights: Dict[str, Dict[str, float]] = {
+            metric: {"passed": 0.0, "total": 0.0}
+            for metric in self._METRIC_NAMES.values()
+        }
 
         for criterion in rubric:
             criterion_id = criterion["id"]
             weight = float(criterion.get("weight", 1))
-            metric = criterion.get("metric", "technical_accuracy")
+            source_metric = criterion.get("metric", "technical_accuracy")
+            metric = self._METRIC_NAMES.get(source_metric, f"lexical_{source_metric}")
             metric_weights.setdefault(metric, {"passed": 0.0, "total": 0.0})
             metric_weights[metric]["total"] += weight
 

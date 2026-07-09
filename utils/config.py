@@ -83,6 +83,9 @@ class BenchmarkConfig:
     temperature: float = 0.2
     concurrency: int = 1
     request_log: Optional[str] = None
+    repeats: int = 1
+    seed: Optional[int] = 0
+    continue_on_error: bool = True
 
 
 # Default providers configuration
@@ -226,6 +229,9 @@ def load_config(config_path: str) -> BenchmarkConfig:
         temperature=data.get("temperature", 0.2),
         concurrency=data.get("concurrency", 1),
         request_log=data.get("request_log"),
+        repeats=data.get("repeats", 1),
+        seed=data.get("seed", 0),
+        continue_on_error=data.get("continue_on_error", True),
     )
     validate_config(config)
     return config
@@ -241,6 +247,12 @@ def validate_config(config: BenchmarkConfig) -> None:
         raise ValueError("temperature must be >= 0")
     if config.concurrency <= 0:
         raise ValueError("concurrency must be > 0")
+    if config.repeats <= 0:
+        raise ValueError("repeats must be > 0")
+    if config.seed is not None and not isinstance(config.seed, int):
+        raise ValueError("seed must be an integer or null")
+    if not isinstance(config.continue_on_error, bool):
+        raise ValueError("continue_on_error must be a boolean")
     if config.provider.timeout <= 0:
         raise ValueError("provider.timeout must be > 0")
 
@@ -316,6 +328,9 @@ def save_config(config: BenchmarkConfig, config_path: str) -> None:
         "temperature": config.temperature,
         "concurrency": config.concurrency,
         "request_log": config.request_log,
+        "repeats": config.repeats,
+        "seed": config.seed,
+        "continue_on_error": config.continue_on_error,
     }
 
     # Add optional fields

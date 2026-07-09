@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 
 import requests
 
-from .base import APIClient, RequestsRetryMixin
+from .base import APIClient, ProviderResponse, RequestsRetryMixin
 
 
 class OllamaClient(RequestsRetryMixin, APIClient):
@@ -40,7 +40,8 @@ class OllamaClient(RequestsRetryMixin, APIClient):
         max_tokens: int = 768,
         retries: int = 3,
         temperature: float = 0.2,
-    ) -> str:
+        seed: int | None = None,
+    ) -> ProviderResponse:
         """Query Ollama API with retry logic."""
         url = f"{self.base_url}/api/chat"
         payload = {
@@ -52,6 +53,8 @@ class OllamaClient(RequestsRetryMixin, APIClient):
                 "num_predict": max_tokens,
             },
         }
+        if seed is not None:
+            payload["options"]["seed"] = seed
         if self.keep_alive:
             payload["keep_alive"] = self.keep_alive
 
@@ -60,7 +63,24 @@ class OllamaClient(RequestsRetryMixin, APIClient):
         )
         try:
             message = data["message"]
-            return message.get("content") or message.get("thinking", "")
+            content = message.get("content")
+            response_source = "content"
+            if not content:
+                content = message.get("thinking", "")
+                response_source = "thinking" if content else "empty"
+            return ProviderResponse(
+                content,
+                finish_reason=data.get("done_reason"),
+                usage={
+                    "prompt_tokens": data.get("prompt_eval_count"),
+                    "completion_tokens": data.get("eval_count"),
+                },
+                actual_model=data.get("model", self.model_name),
+                metadata={
+                    "response_source": response_source,
+                    "total_duration": data.get("total_duration"),
+                },
+            )
         except KeyError as e:
             raise RuntimeError(f"Invalid API response format: {e}") from e
 

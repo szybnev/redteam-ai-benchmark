@@ -4,7 +4,7 @@ from typing import Dict, List
 
 import requests
 
-from .base import APIClient, RequestsRetryMixin
+from .base import APIClient, ProviderResponse, RequestsRetryMixin
 
 
 class LMStudioClient(RequestsRetryMixin, APIClient):
@@ -23,7 +23,8 @@ class LMStudioClient(RequestsRetryMixin, APIClient):
         max_tokens: int = 768,
         retries: int = 3,
         temperature: float = 0.2,
-    ) -> str:
+        seed: int | None = None,
+    ) -> ProviderResponse:
         """Query LM Studio API with retry logic."""
         url = f"{self.base_url}/v1/chat/completions"
         headers = {"Content-Type": "application/json"}
@@ -34,12 +35,21 @@ class LMStudioClient(RequestsRetryMixin, APIClient):
             "max_tokens": max_tokens,
             "stream": False,
         }
+        if seed is not None:
+            payload["seed"] = seed
 
         data = self._post_json_with_retries(
             url=url, headers=headers, payload=payload, retries=retries
         )
         try:
-            return data["choices"][0]["message"]["content"]
+            choice = data["choices"][0]
+            return ProviderResponse(
+                choice["message"]["content"],
+                finish_reason=choice.get("finish_reason"),
+                usage=data.get("usage"),
+                response_id=data.get("id"),
+                actual_model=data.get("model", self.model_name),
+            )
         except (KeyError, IndexError) as e:
             raise RuntimeError(f"Invalid API response format: {e}") from e
 

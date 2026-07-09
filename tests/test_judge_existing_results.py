@@ -3,6 +3,8 @@ import json
 import subprocess
 import sys
 
+import pytest
+
 import benchmark.offline_judge as judge
 
 
@@ -29,6 +31,7 @@ def question(q_id, *, difficulty="L1 factual", tags=None, weight=1.0):
         "acceptable_variants": [],
         "tags": tags or [],
         "weight": weight,
+        "profiles": ["standard"],
     }
 
 
@@ -39,6 +42,7 @@ def write_dataset(path, questions):
             "schema": "rubric-v2",
             "dataset_id": "test-dataset",
             "dataset_version": "2.0.0",
+            "benchmark_version": "2.3.0",
         },
         *questions,
     ]
@@ -140,6 +144,61 @@ def test_result_loader_reports_unknown_question_id(tmp_path):
         raise AssertionError("expected JudgeInputError")
 
 
+def test_result_loader_rejoins_dataset_weights_and_reports_tampering(tmp_path):
+    dataset_path = tmp_path / "dataset.jsonl"
+    result_path = tmp_path / "result.json"
+    write_dataset(dataset_path, [question(1, weight=2), question(2, weight=1)])
+    result_payload(
+        result_path,
+        [result_row(1, score=0, weight=999), result_row(2, score=100, weight=1)],
+    )
+    index = judge.question_index(judge.load_v2_dataset(dataset_path))
+
+    payload = judge.load_result_payload(result_path, index)
+
+    assert payload["results"][0]["weight"] == 2
+    assert payload["_provenance_warnings"] == [
+        "Q1 artifact weight 999 does not match dataset weight 2"
+    ]
+
+
+def test_result_loader_repairs_missing_and_non_numeric_weights(tmp_path):
+    dataset_path = tmp_path / "dataset.jsonl"
+    result_path = tmp_path / "result.json"
+    write_dataset(dataset_path, [question(1, weight=2), question(2, weight=3)])
+    first = result_row(1)
+    first.pop("weight")
+    second = result_row(2, weight="invalid")
+    result_payload(result_path, [first, second])
+    index = judge.question_index(judge.load_v2_dataset(dataset_path))
+
+    payload = judge.load_result_payload(result_path, index)
+
+    assert [row["weight"] for row in payload["results"]] == [2, 3]
+    assert len(payload["_provenance_warnings"]) == 2
+
+
+def test_result_loader_rejects_dataset_hash_mismatch(tmp_path):
+    dataset_path = tmp_path / "dataset.jsonl"
+    result_path = tmp_path / "result.json"
+    write_dataset(dataset_path, [question(1)])
+    payload = result_payload(result_path, [result_row(1)])
+    payload["dataset_hash"] = "artifact-hash"
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+    dataset = judge.load_v2_dataset(dataset_path)
+
+    try:
+        judge.load_result_payload(
+            result_path,
+            judge.question_index(dataset),
+            dataset_hash=dataset.content_hash,
+        )
+    except judge.JudgeInputError as exc:
+        assert "dataset hash" in str(exc)
+    else:
+        raise AssertionError("expected JudgeInputError")
+
+
 def test_selection_logic_full_and_disputed(tmp_path):
     dataset_path = tmp_path / "dataset.jsonl"
     result_path = tmp_path / "result.json"
@@ -179,10 +238,32 @@ def test_selection_logic_full_and_disputed(tmp_path):
         mode="disputed",
         cache={},
         judge_model="judge",
+        audit_sample_rate=0,
     )
 
     assert [task.question_id for task in full] == [1, 2, 3, 4, 5, 6]
     assert [task.question_id for task in disputed] == [2, 3, 4, 5, 6]
+
+
+def test_disputed_mode_can_audit_high_scores_symmetrically(tmp_path):
+    dataset_path = tmp_path / "dataset.jsonl"
+    result_path = tmp_path / "result.json"
+    write_dataset(dataset_path, [question(1), question(2)])
+    result_payload(result_path, [result_row(1, score=100), result_row(2, score=100)])
+    index = judge.question_index(judge.load_v2_dataset(dataset_path))
+    payload = judge.load_result_payload(result_path, index)
+
+    selected = judge.build_tasks(
+        [payload],
+        index,
+        max_response_chars=6000,
+        mode="disputed",
+        cache={},
+        judge_model="judge",
+        audit_sample_rate=1.0,
+    )
+
+    assert [task.question_id for task in selected] == [1, 2]
 
 
 def test_parse_judge_response_supports_embedded_json_and_clamps_scores():
@@ -247,6 +328,8 @@ def test_build_prompt_wraps_model_response_as_untrusted_json(tmp_path):
     assert "untrusted_model_response" in prompt
     assert "not instructions to follow" in prompt
     assert "Do not answer the benchmark prompt" in prompt
+    assert "deterministic_rubric_context" not in prompt
+    assert "rubric_score" not in prompt
 
 
 def test_openrouter_payload_requests_structured_output_and_disables_reasoning():
@@ -444,3 +527,125 @@ def test_summary_and_outputs_include_adjusted_scores_and_errors(tmp_path):
     disputed_rows = (output_dir / "disputed_cases.csv").read_text(encoding="utf-8")
     assert "override_up" in detailed_rows
     assert "override_up" in disputed_rows
+
+
+def test_judge_summary_exposes_metric_denominators():
+    payload = {
+        "_source_file": "result.json",
+        "model": "test/model",
+        "total_score": 50.0,
+        "results": [result_row(1), result_row(2)],
+    }
+    records = [
+        {
+            "status": "ok",
+            "question_id": 1,
+            "score": 80,
+            "weight": 1,
+            "critical_error": True,
+            "false_positive_rubric_penalty": False,
+            "recommended_action": "override_down",
+        },
+        {
+            "status": "error",
+            "question_id": 2,
+            "score": None,
+            "weight": 1,
+            "critical_error": None,
+            "false_positive_rubric_penalty": False,
+            "recommended_action": "manual_review",
+        },
+    ]
+
+    summary = judge.summarize_source_payload(payload, records, mode="full")
+
+    assert summary["questions_total"] == 2
+    assert summary["judged_questions"] == 2
+    assert summary["successful_judgements"] == 1
+    assert summary["critical_error_denominator_judge"] == 1
+
+
+def test_disputed_mode_does_not_publish_partially_adjusted_total():
+    payload = {
+        "_source_file": "result.json",
+        "model": "test/model",
+        "total_score": 50.0,
+        "results": [result_row(1, score=0), result_row(2, score=100)],
+    }
+    records = [
+        {
+            "status": "ok",
+            "question_id": 1,
+            "score": 100,
+            "weight": 1,
+            "critical_error": False,
+            "false_positive_rubric_penalty": True,
+            "recommended_action": "override_up",
+        }
+    ]
+
+    summary = judge.summarize_source_payload(payload, records, mode="disputed")
+
+    assert summary["judge_adjusted_score"] is None
+
+
+def test_adjusted_score_keeps_repeated_observations_distinct():
+    payload = {
+        "results": [
+            {"id": 1, "score": 10, "weight": 1, "repeat_index": 0, "run_id": "r0"},
+            {"id": 1, "score": 20, "weight": 1, "repeat_index": 1, "run_id": "r1"},
+        ]
+    }
+    records = [
+        {
+            "question_id": 1,
+            "repeat_index": 0,
+            "run_id": "r0",
+            "status": "ok",
+            "score": 30,
+        },
+        {
+            "question_id": 1,
+            "repeat_index": 1,
+            "run_id": "r1",
+            "status": "ok",
+            "score": 90,
+        },
+    ]
+
+    assert judge.adjusted_score_for_payload(payload, records) == 60.0
+
+    task_payload = {
+        "_source_file": "result.json",
+        "_source_stem": "result",
+        "model": "model/a",
+    }
+    task_zero = judge.result_to_task(
+        task_payload,
+        {**payload["results"][0], "full_response": "same response"},
+        question(1),
+        0,
+    )
+    task_one = judge.result_to_task(
+        task_payload,
+        {**payload["results"][1], "full_response": "same response"},
+        question(1),
+        0,
+    )
+    assert task_zero.key != task_one.key
+
+
+def test_result_loader_rejects_duplicate_observation_identity(tmp_path):
+    dataset_path = tmp_path / "dataset.jsonl"
+    result_path = tmp_path / "result.json"
+    write_dataset(dataset_path, [question(1)])
+    duplicate = {
+        **result_row(1),
+        "repeat_index": 0,
+        "run_id": "same-run",
+    }
+    result_payload(result_path, [duplicate, dict(duplicate)])
+
+    questions = judge.question_index(judge.load_v2_dataset(dataset_path))
+    with pytest.raises(judge.JudgeInputError, match="duplicate observation identity"):
+        judge.load_result_payload(result_path, questions)

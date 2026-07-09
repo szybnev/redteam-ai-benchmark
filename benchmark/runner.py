@@ -1,10 +1,13 @@
 """Benchmark question runners."""
 
+import inspect
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from models.base import ProviderResponse
 from scoring.base import ScoringResult
+from scoring.refusal import is_censored_response
 from utils.request_log import append_request_log
 
 from .shutdown import GracefulShutdown
@@ -55,6 +58,14 @@ def _make_result(
     evidence: Optional[List[Dict[str, Any]]] = None,
     metrics: Optional[Dict[str, Any]] = None,
     details: Optional[Dict[str, Any]] = None,
+    provider_response: Optional[Dict[str, Any]] = None,
+    status: str = "ok",
+    error_type: Optional[str] = None,
+    error: Optional[str] = None,
+    attempts: int = 1,
+    repeat_index: int = 0,
+    seed: Optional[int] = None,
+    run_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build the persisted per-question result object."""
     return QuestionResult(
@@ -77,7 +88,34 @@ def _make_result(
         capability=q.get("capability"),
         weight=float(q.get("weight", 1.0)),
         details=details or {},
+        provider_response=provider_response or {},
+        status=status,
+        error_type=error_type,
+        error=error,
+        attempts=attempts,
+        repeat_index=repeat_index,
+        seed=seed,
+        run_id=run_id,
     ).to_dict()
+
+
+def _make_request_error_result(
+    q: Dict[str, Any], exc: Exception, runtime: RuntimeOptions
+) -> Dict[str, Any]:
+    """Persist one failed request without presenting it as a scored answer."""
+    return _make_result(
+        q,
+        score=0,
+        response="",
+        details={"method": "runtime", "reason": "request_error"},
+        status="error",
+        error_type=str(getattr(exc, "error_type", type(exc).__name__)),
+        error=str(exc),
+        attempts=int(getattr(exc, "attempts", 1)),
+        repeat_index=runtime.repeat_index,
+        seed=runtime.seed,
+        run_id=runtime.run_id,
+    )
 
 
 def _query_and_score(
@@ -90,11 +128,24 @@ def _query_and_score(
 ) -> Dict[str, Any]:
     """Query a model for one question and score the response."""
     start_time = time.time()
-    response = client.query(
-        q["prompt"],
-        max_tokens=runtime.max_tokens,
-        temperature=runtime.temperature,
-    )
+    query_kwargs = {
+        "max_tokens": runtime.max_tokens,
+        "temperature": runtime.temperature,
+    }
+    if "seed" in inspect.signature(client.query).parameters:
+        query_kwargs["seed"] = runtime.seed
+    raw_response = client.query(q["prompt"], **query_kwargs)
+    if isinstance(raw_response, ProviderResponse):
+        provider_response = raw_response.to_dict()
+    else:
+        provider_response = {
+            "finish_reason": None,
+            "usage": {},
+            "response_id": None,
+            "actual_model": None,
+            "metadata": {"response_contract": "legacy-string"},
+        }
+    response = str(raw_response)
     latency_ms = (time.time() - start_time) * 1000
     scoring = _with_default_details(
         _score_response(scorer_func, scorer, q["id"], response), scorer_details
@@ -113,6 +164,7 @@ def _query_and_score(
         evidence=scoring.evidence,
         metrics=scoring.metrics,
         details=scoring.details,
+        provider_response=provider_response,
     ).__dict__
 
 
@@ -129,6 +181,11 @@ def _log_request_result(
     prompt: Optional[str] = None,
     optimization_iteration: Optional[int] = None,
     optimization_strategy: Optional[str] = None,
+    status: str = "ok",
+    error_type: Optional[str] = None,
+    error: Optional[str] = None,
+    attempts: int = 1,
+    provider_response: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Write one request event without provider headers or credentials."""
     append_request_log(
@@ -148,6 +205,14 @@ def _log_request_result(
             "critical_error": critical_error,
             "optimization_iteration": optimization_iteration,
             "optimization_strategy": optimization_strategy,
+            "status": status,
+            "error_type": error_type,
+            "error": error,
+            "attempts": attempts,
+            "provider_response": provider_response or {},
+            "repeat_index": runtime.repeat_index,
+            "seed": runtime.seed,
+            "run_id": runtime.run_id,
         },
     )
 
@@ -190,6 +255,27 @@ def _run_questions_sequential(
         except GracefulShutdown:
             print("  ⚠️  Graceful shutdown during model query.")
             break
+        except Exception as exc:  # noqa: BLE001 - preserve partial benchmark output.
+            if not runtime.continue_on_error:
+                raise
+            error_result = _make_request_error_result(q, exc, runtime)
+            results.append(error_result)
+            _log_request_result(
+                runtime,
+                q,
+                phase="baseline",
+                response="",
+                score=0,
+                latency_ms=None,
+                censored=False,
+                critical_error=False,
+                status="error",
+                error_type=error_result["error_type"],
+                error=error_result["error"],
+                attempts=error_result["attempts"],
+            )
+            print(f"  Request failed: {exc}")
+            continue
         response = query_result["response"]
         score = query_result["score"]
         latency_ms = query_result["latency_ms"]
@@ -203,6 +289,26 @@ def _run_questions_sequential(
         metrics = query_result["metrics"]
         details = query_result["details"]
 
+        baseline_result = _make_result(
+            q,
+            score,
+            response,
+            censored,
+            similarity,
+            latency_ms,
+            normalized_score,
+            critical_error,
+            criteria_passed,
+            criteria_failed,
+            evidence,
+            metrics,
+            details,
+            query_result["provider_response"],
+            repeat_index=runtime.repeat_index,
+            seed=runtime.seed,
+            run_id=runtime.run_id,
+        )
+
         _log_request_result(
             runtime,
             q,
@@ -212,10 +318,11 @@ def _run_questions_sequential(
             latency_ms=latency_ms,
             censored=censored,
             critical_error=critical_error,
+            provider_response=query_result["provider_response"],
         )
 
-        if score == 0 and optimizer:
-            print("  ⚠️  Censored response (0%), starting optimization...")
+        if censored and optimizer:
+            print("  ⚠️  Censored response, starting optimization...")
 
             if tracer:
                 tracer.start_optimization(q["id"], q["category"])
@@ -260,7 +367,7 @@ def _run_questions_sequential(
                     response=attempt.get("response", ""),
                     score=attempt.get("score", 0),
                     latency_ms=attempt.get("latency_ms"),
-                    censored=attempt.get("score", 0) == 0,
+                    censored=is_censored_response(attempt.get("response", "")),
                     critical_error=False,
                     optimization_iteration=attempt.get("iteration"),
                     optimization_strategy=attempt.get("strategy"),
@@ -289,12 +396,35 @@ def _run_questions_sequential(
             metrics = opt_scoring.metrics
             details = opt_scoring.details
 
+            optimized_result = _make_result(
+                q,
+                score,
+                response,
+                censored,
+                similarity,
+                latency_ms,
+                normalized_score,
+                critical_error,
+                criteria_passed,
+                criteria_failed,
+                evidence,
+                metrics,
+                details,
+                repeat_index=runtime.repeat_index,
+                seed=runtime.seed,
+                run_id=runtime.run_id,
+            )
+
             optimization_results.append(
                 {
                     "id": q["id"],
                     "category": q["category"],
-                    "original_score": 0,
+                    "original_score": baseline_result["score"],
                     "best_score": score,
+                    "baseline_score": baseline_result["score"],
+                    "optimized_score": score,
+                    "baseline_result": baseline_result,
+                    "optimized_result": optimized_result,
                     "best_prompt": opt_result["prompt"],
                     "iterations": opt_result["iterations"],
                     "success": opt_result["success"],
@@ -314,23 +444,7 @@ def _run_questions_sequential(
                 model=model_name,
             )
 
-        results.append(
-            _make_result(
-                q,
-                score,
-                response,
-                censored,
-                similarity,
-                latency_ms,
-                normalized_score,
-                critical_error,
-                criteria_passed,
-                criteria_failed,
-                evidence,
-                metrics,
-                details,
-            )
-        )
+        results.append(baseline_result)
         try:
             _sleep_between_requests(runtime.rate_limit_delay)
         except GracefulShutdown:
@@ -378,18 +492,26 @@ def _run_questions_concurrent(
                 scorer,
                 scorer_details,
             )
-            future_to_index[future] = index
+            future_to_index[future] = (index, q)
 
         for future in as_completed(future_to_index):
             if shutdown_requested():
                 interrupted = True
                 break
-            index = future_to_index[future]
+            index, submitted_question = future_to_index[future]
             try:
                 query_result = future.result()
             except GracefulShutdown:
                 interrupted = True
                 break
+            except Exception as exc:  # noqa: BLE001 - preserve other completed futures.
+                if not runtime.continue_on_error:
+                    raise
+                indexed_results[index] = _make_request_error_result(
+                    submitted_question, exc, runtime
+                )
+                print(f"  Request failed for Q{submitted_question['id']}: {exc}")
+                continue
             q = query_result["question"]
             _log_request_result(
                 runtime,
@@ -400,6 +522,7 @@ def _run_questions_concurrent(
                 latency_ms=query_result["latency_ms"],
                 censored=query_result["censored"],
                 critical_error=query_result["critical_error"],
+                provider_response=query_result["provider_response"],
             )
             indexed_results[index] = _make_result(
                 q,
@@ -415,6 +538,10 @@ def _run_questions_concurrent(
                 query_result["evidence"],
                 query_result["metrics"],
                 query_result["details"],
+                query_result["provider_response"],
+                repeat_index=runtime.repeat_index,
+                seed=runtime.seed,
+                run_id=runtime.run_id,
             )
     except GracefulShutdown:
         interrupted = True

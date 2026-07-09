@@ -5,6 +5,7 @@ import hashlib
 import importlib.metadata
 import json
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -30,6 +31,7 @@ from benchmark import (
     load_questions,
     run_single_model_benchmark,
 )
+from benchmark.leaderboard import LeaderboardInputError, build_leaderboard
 from benchmark.offline_judge import add_judge_args
 from benchmark.offline_judge import run as run_offline_judge
 from benchmark.types import (
@@ -42,21 +44,23 @@ from models import create_client
 from optimization import PromptOptimizer, save_optimization_results
 from scoring import create_scorer
 from scoring.refusal import is_censored_response
+from scoring.rubric_scorer import RubricScorer
 from tracing import LANGFUSE_AVAILABLE
 from utils import load_config
 from utils.config import DEFAULT_QUESTIONS_FILE, DEFAULT_SCORER
 from utils.export import BenchmarkExporter
 
 Langfuse = langfuse_module.Langfuse
-BENCHMARK_VERSION = "2.1.0"
+BENCHMARK_VERSION = "2.3.0"
 DEFAULT_PROFILE = "standard"
 PROFILE_DEFAULTS = {
     "quick": {"questions_file": DEFAULT_QUESTIONS_FILE},
     "standard": {"questions_file": DEFAULT_QUESTIONS_FILE},
-    "enterprise": {"questions_file": DEFAULT_QUESTIONS_FILE},
-    "local-only": {"questions_file": DEFAULT_QUESTIONS_FILE},
-    "cloud-comparison": {"questions_file": DEFAULT_QUESTIONS_FILE},
 }
+
+
+class ConfigLoadError(RuntimeError):
+    """Raised when an explicitly requested configuration cannot be loaded."""
 
 
 class LangfuseTracer(langfuse_module.LangfuseTracer):
@@ -108,8 +112,7 @@ def _load_optional_config(args):
         print(f"📄 Loaded configuration from {args.config}")
         return config
     except Exception as e:
-        print(f"⚠️  Warning: Failed to load config: {e}")
-        return None
+        raise ConfigLoadError(f"Failed to load config {args.config}: {e}") from e
 
 
 def _apply_config_defaults(args, config) -> None:
@@ -197,6 +200,27 @@ def _resolve_runtime_options(args, config) -> RuntimeOptions:
             if config
             else None
         ),
+        repeats=(
+            args.repeats
+            if getattr(args, "repeats", None) is not None
+            else getattr(config, "repeats", 1)
+            if config
+            else 1
+        ),
+        seed=(
+            args.seed
+            if getattr(args, "seed", None) is not None
+            else getattr(config, "seed", 0)
+            if config
+            else 0
+        ),
+        continue_on_error=(
+            False
+            if getattr(args, "fail_fast", False)
+            else getattr(config, "continue_on_error", True)
+            if config
+            else True
+        ),
     )
     _validate_runtime_options(options)
     return options
@@ -212,6 +236,8 @@ def _validate_runtime_options(options: RuntimeOptions) -> None:
         raise ValueError("--temperature must be >= 0")
     if options.concurrency <= 0:
         raise ValueError("--concurrency must be > 0")
+    if options.repeats <= 0:
+        raise ValueError("--repeats must be > 0")
 
 
 def _create_scorer_bundle(args, config, questions: List[Dict]):
@@ -261,9 +287,11 @@ def _filter_questions_by_profile(
     filtered = [
         question
         for question in questions
-        if profile in question.get("profiles", [DEFAULT_PROFILE, "enterprise"])
+        if profile in question.get("profiles", [DEFAULT_PROFILE])
     ]
-    return filtered or questions
+    if not filtered:
+        raise ValueError(f"No questions selected for profile: {profile}")
+    return filtered
 
 
 def _parse_question_ids(raw_ids: List[str] | None) -> List[int]:
@@ -373,14 +401,27 @@ def _stable_hash(payload: Dict) -> str:
 def _export_run_config(
     *,
     args,
+    config,
     model_name: str | None,
     dataset: BenchmarkDataset | None,
     runtime: RuntimeOptions | None,
 ) -> Dict:
     """Build stable, non-secret run parameters for JSON exports."""
+    provider = getattr(args, "provider", None)
+    configured_provider = getattr(config, "provider", None) if config else None
+    provider_timeout = getattr(configured_provider, "timeout", None)
+    if provider_timeout is None:
+        provider_timeout = 120 if provider == "openrouter" else 150
+    keep_alive = getattr(args, "ollama_keep_alive", None) or getattr(
+        configured_provider, "keep_alive", None
+    )
+    if provider == "ollama" and keep_alive is None:
+        keep_alive = os.environ.get("OLLAMA_KEEP_ALIVE")
     return {
-        "provider": getattr(args, "provider", None),
+        "provider": provider,
         "endpoint": getattr(args, "endpoint", None),
+        "provider_timeout": provider_timeout,
+        "keep_alive": keep_alive,
         "model": model_name,
         "profile": getattr(args, "profile", DEFAULT_PROFILE),
         "questions_file": dataset.path if dataset else None,
@@ -391,6 +432,9 @@ def _export_run_config(
         "temperature": runtime.temperature if runtime else None,
         "rate_limit_delay": runtime.rate_limit_delay if runtime else None,
         "concurrency": runtime.concurrency if runtime else None,
+        "repeats": runtime.repeats if runtime else None,
+        "seed": runtime.seed if runtime else None,
+        "continue_on_error": runtime.continue_on_error if runtime else None,
         "request_log": runtime.request_log if runtime else None,
         "question_ids": getattr(args, "question_ids", None),
         "optimize_prompts": getattr(args, "optimize_prompts", None),
@@ -408,12 +452,14 @@ def _export_metadata(
     dataset: BenchmarkDataset | None,
     runtime: RuntimeOptions | None,
     scoring_method: str,
+    scorer_version: str | None = None,
     extra_metadata: Dict | None = None,
 ) -> Dict:
     """Build top-level audit provenance for exported benchmark results."""
     dataset_metadata = dataset.metadata if dataset else {}
     run_config = _export_run_config(
         args=args,
+        config=config,
         model_name=model_name,
         dataset=dataset,
         runtime=runtime,
@@ -422,13 +468,33 @@ def _export_metadata(
         "run_config": run_config,
         "scorer": scoring_method,
     }
+    resolved_scorer_version = scorer_version or (
+        RubricScorer.VERSION if scoring_method == "rubric" else scoring_method
+    )
+    evaluation_payload = {
+        "provider": run_config["provider"],
+        "endpoint": run_config["endpoint"],
+        "model": run_config["model"],
+        "profile": run_config["profile"],
+        "questions_file": run_config["questions_file"],
+        "question_ids": run_config["question_ids"],
+        "max_tokens": run_config["max_tokens"],
+        "temperature": run_config["temperature"],
+        "repeats": run_config["repeats"],
+        "seed": run_config["seed"],
+        "keep_alive": run_config["keep_alive"],
+        "continue_on_error": run_config["continue_on_error"],
+        "dataset_hash": dataset.content_hash if dataset else None,
+        "scorer_version": resolved_scorer_version,
+    }
     metadata = {
         "benchmark_version": dataset_metadata.get("benchmark_version", BENCHMARK_VERSION),
         "dataset_id": dataset_metadata.get("dataset_id", "unknown"),
         "dataset_version": dataset_metadata.get("dataset_version", "1.0.0"),
         "dataset_hash": dataset.content_hash if dataset else None,
-        "scorer_version": scoring_method,
+        "scorer_version": resolved_scorer_version,
         "config_hash": _stable_hash(config_payload),
+        "evaluation_fingerprint": _stable_hash(evaluation_payload),
         "run_config": run_config,
         "git_commit": _git_commit(),
         "package_version": _package_version(),
@@ -436,6 +502,75 @@ def _export_metadata(
     }
     if extra_metadata:
         metadata["metadata"] = extra_metadata
+    return metadata
+
+
+def _environment_metadata() -> Dict:
+    """Return reproducibility metadata available without extra provider calls."""
+    dependencies = {}
+    for package in ("httpx", "langfuse", "PyYAML", "requests", "tenacity"):
+        try:
+            dependencies[package] = importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            dependencies[package] = "unavailable"
+    return {
+        "python_version": platform.python_version(),
+        "platform": platform.platform(),
+        "machine": platform.machine() or "unknown",
+        "processor": platform.processor() or "unknown",
+        "dependencies": dependencies,
+    }
+
+
+def _provider_result_metadata(
+    results: List[Dict], provider_setup: Dict | None = None
+) -> Dict:
+    """Aggregate provider response metadata captured per question."""
+    actual_models = set()
+    revisions = set()
+    finish_reasons: Dict[str, int] = {}
+    usage: Dict[str, float] = {}
+    if provider_setup and isinstance(provider_setup.get("model"), dict):
+        setup_model = provider_setup["model"]
+        for key in ("digest", "revision", "model_revision"):
+            if setup_model.get(key):
+                revisions.add(str(setup_model[key]))
+    for result in results:
+        response = result.get("provider_response") or {}
+        if response.get("actual_model"):
+            actual_models.add(str(response["actual_model"]))
+        reason = response.get("finish_reason")
+        if reason:
+            finish_reasons[str(reason)] = finish_reasons.get(str(reason), 0) + 1
+        for key, value in (response.get("usage") or {}).items():
+            if isinstance(value, (int, float)):
+                usage[key] = usage.get(key, 0) + value
+        response_metadata = response.get("metadata") or {}
+        revision = next(
+            (
+                response_metadata.get(key)
+                for key in ("digest", "revision", "model_revision")
+                if response_metadata.get(key)
+            ),
+            None,
+        )
+        if revision:
+            revisions.add(str(revision))
+
+    metadata = {
+        "actual_models": sorted(actual_models),
+        "finish_reasons": finish_reasons,
+        "usage": usage,
+        "immutable_model_revisions": sorted(revisions),
+        "provider_setup": provider_setup or {
+            "status": "unavailable",
+            "reason": "provider setup metadata was not collected",
+        },
+    }
+    if not revisions:
+        metadata["revision_unavailable_reason"] = (
+            "provider responses did not include an immutable model revision"
+        )
     return metadata
 
 
@@ -452,6 +587,8 @@ def _export_benchmark_results(
     runtime: RuntimeOptions | None = None,
     summary: Dict | None = None,
     metadata: Dict | None = None,
+    scorer_version: str | None = None,
+    provider_setup: Dict | None = None,
 ) -> Dict[str, str]:
     """Export benchmark results according to CLI and config options."""
     export_config = config.export if config else None
@@ -472,21 +609,27 @@ def _export_benchmark_results(
     exported = {}
 
     if "json" in formats:
+        export_metadata = _export_metadata(
+            args=args,
+            model_name=model_name,
+            config=config,
+            dataset=dataset,
+            runtime=runtime,
+            scoring_method=scoring_method,
+            scorer_version=scorer_version,
+            extra_metadata=metadata,
+        )
+        export_metadata["environment"] = _environment_metadata()
+        export_metadata["provider_metadata"] = _provider_result_metadata(
+            results, provider_setup
+        )
         exported["json"] = exporter.export_json(
             results=results,
             total_score=total_score,
             interpretation=interpretation,
             scoring_method=scoring_method,
             summary=summary,
-            metadata=_export_metadata(
-                args=args,
-                model_name=model_name,
-                config=config,
-                dataset=dataset,
-                runtime=runtime,
-                scoring_method=scoring_method,
-                extra_metadata=metadata,
-            ),
+            metadata=export_metadata,
             filename=filename,
         )
 
@@ -530,6 +673,24 @@ def _initialize_optimizer(args, endpoint: str):
         return None
 
 
+def _optimization_provenance(dataset, runtime, scorer_bundle, profile: str) -> Dict:
+    """Build provenance for the separate prompt-optimization sidecar."""
+    scorer = getattr(scorer_bundle, "scorer", None)
+    details = getattr(scorer_bundle, "details", {})
+    return {
+        "benchmark_version": BENCHMARK_VERSION,
+        "dataset_id": dataset.metadata.get("dataset_id"),
+        "dataset_version": dataset.metadata.get("dataset_version"),
+        "dataset_hash": dataset.content_hash,
+        "scoring_method": scorer_bundle.method_label,
+        "scorer_version": getattr(scorer, "VERSION", None)
+        or details.get("scorer_version"),
+        "profile": profile,
+        "repeats": runtime.repeats,
+        "base_seed": runtime.seed,
+    }
+
+
 def _langfuse_config_or_none(config):
     """Return active Langfuse config if tracing can be enabled."""
     if config and config.langfuse.enabled and LANGFUSE_AVAILABLE:
@@ -543,11 +704,14 @@ def _print_runtime(runtime: RuntimeOptions) -> None:
         f"Runtime: max_tokens={runtime.max_tokens}, "
         f"temperature={runtime.temperature}, "
         f"rate_limit_delay={runtime.rate_limit_delay}, "
-        f"concurrency={runtime.concurrency}\n"
+        f"concurrency={runtime.concurrency}, repeats={runtime.repeats}, "
+        f"seed={runtime.seed}\n"
     )
 
 
-def _print_final_report(results: List[Dict], total_score: float) -> None:
+def _print_final_report(
+    results: List[Dict], total_score: float, interpretation: str
+) -> None:
     print("\n" + "=" * 70)
     print(f"📊 FINAL SCORE: {total_score:.1f}%")
     print("=" * 70)
@@ -557,7 +721,11 @@ def _print_final_report(results: List[Dict], total_score: float) -> None:
         print(f"{r['id']:<3} {r['category']:<25} {r['score']:<6} {r['response_snippet']}")
 
     print("\n✅ Interpretation:")
-    if total_score >= 80:
+    if interpretation == "incomplete":
+        print("   Run is incomplete; inspect request failures and score coverage.")
+    elif interpretation == "uncertain":
+        print("   Repeat confidence interval crosses an interpretation threshold.")
+    elif total_score >= 80:
         print("   Model is a strong candidate; review breakdowns before production use.")
     elif total_score >= 60:
         print("   Model requires RAG + manual validation before use.")
@@ -581,6 +749,14 @@ def _run_model_with_export(
     dataset=None,
     shutdown_requested=None,
 ):
+    if hasattr(client, "get_model_metadata"):
+        provider_setup = client.get_model_metadata()
+    else:
+        provider_setup = {
+            "requested_model": model_name,
+            "status": "unavailable",
+            "reason": "client does not implement model metadata discovery",
+        }
     return run_single_model_benchmark(
         questions=questions,
         client=client,
@@ -598,6 +774,7 @@ def _run_model_with_export(
             "multi_model": multi_model,
             "dataset": dataset,
             "runtime": runtime,
+            "provider_setup": provider_setup,
         },
         shutdown_requested=shutdown_requested,
     )
@@ -645,6 +822,18 @@ def cmd_list_models(args):
 def cmd_judge(args) -> int:
     """Run offline LLM-as-Judge over saved v2 benchmark results."""
     return run_offline_judge(args)
+
+
+def cmd_leaderboard(args) -> int:
+    """Build publication artifacts from a complete full-judge summary."""
+    try:
+        paths = build_leaderboard(args.judge_summary, args.output_dir)
+    except (LeaderboardInputError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(f"Leaderboard JSON: {paths['json']}")
+    print(f"Leaderboard Markdown: {paths['markdown']}")
+    return 0
 
 
 def cmd_interactive(args):
@@ -790,6 +979,12 @@ def cmd_interactive(args):
                                 run_result.optimization_results,
                                 model_name,
                                 args.optimizer_model,
+                                provenance=_optimization_provenance(
+                                    dataset,
+                                    runtime,
+                                    scorer_bundle,
+                                    getattr(args, "profile", DEFAULT_PROFILE),
+                                ),
                             )
 
                         all_results.append(
@@ -878,7 +1073,7 @@ def cmd_run_benchmark(args):
                     f"rate_limit_delay={runtime.rate_limit_delay}, "
                     f"concurrency={runtime.concurrency}"
                 )
-                print("   Evaluating uncensoredness & technical accuracy\n")
+                print("   Evaluating refusal behavior and lexical rubric coverage\n")
 
                 dataset = _load_dataset_for_cli(_questions_file_for_args(args, config))
                 try:
@@ -920,11 +1115,23 @@ def cmd_run_benchmark(args):
 
                 if run_result.optimization_results:
                     save_optimization_results(
-                        run_result.optimization_results, args.model, args.optimizer_model
+                        run_result.optimization_results,
+                        args.model,
+                        args.optimizer_model,
+                        provenance=_optimization_provenance(
+                            dataset,
+                            runtime,
+                            scorer_bundle,
+                            getattr(args, "profile", DEFAULT_PROFILE),
+                        ),
                     )
 
                 if run_result.results:
-                    _print_final_report(run_result.results, run_result.total_score)
+                    _print_final_report(
+                        run_result.results,
+                        run_result.total_score,
+                        run_result.interpretation,
+                    )
                 else:
                     print("\n⚠️  Benchmark interrupted before any question completed.")
 
@@ -981,7 +1188,10 @@ def _add_profile_arg(parser):
         "--profile",
         choices=list(PROFILE_DEFAULTS.keys()),
         default=DEFAULT_PROFILE,
-        help="Benchmark runtime profile (default: standard)",
+        help=(
+            "Benchmark profile: quick is smoke-only and not a ranking proxy; "
+            "standard is the full benchmark (default: standard)"
+        ),
     )
 
 
@@ -1009,6 +1219,23 @@ def _add_runtime_args(parser):
         type=int,
         default=None,
         help="Number of concurrent benchmark questions (default: config or 1)",
+    )
+    parser.add_argument(
+        "--repeats",
+        type=int,
+        default=None,
+        help="Independent repeats per benchmark question (default: config or 1)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Base generation seed; each repeat increments it (default: config or 0)",
+    )
+    parser.add_argument(
+        "--fail-fast",
+        action="store_true",
+        help="Abort the benchmark on the first request error",
     )
     parser.add_argument(
         "--question-ids",
@@ -1080,7 +1307,10 @@ Examples:
   uv run run_benchmark.py run ollama -m "llama3.1:8b" --profile quick
 
   # Run post-hoc LLM-as-Judge over saved v2 results
-  uv run run_benchmark.py judge --results "results_*_v2/*.json" --mode disputed
+  uv run run_benchmark.py judge --results "results_*_v2/*.json" --mode full
+
+  # Build publishable leaderboard artifacts from complete judge output
+  uv run run_benchmark.py leaderboard --judge-summary judge_results_v2/summary.csv
 
   # Custom endpoint
   uv run run_benchmark.py run ollama -e http://192.168.1.100:11434 -m "mistral"
@@ -1112,19 +1342,40 @@ Examples:
     )
     add_judge_args(parser_judge)
 
+    parser_leaderboard = subparsers.add_parser(
+        "leaderboard",
+        help="Build reproducible leaderboard artifacts from full judge output",
+    )
+    parser_leaderboard.add_argument(
+        "--judge-summary",
+        required=True,
+        help="Path to summary.csv produced by a full judge run",
+    )
+    parser_leaderboard.add_argument(
+        "--output-dir",
+        default="leaderboard",
+        help="Directory for the checked leaderboard artifact pack",
+    )
+
     args = parser.parse_args()
 
-    if args.command == "ls":
-        cmd_list_models(args)
-    elif args.command == "run":
-        cmd_run_benchmark(args)
-    elif args.command == "interactive":
-        cmd_interactive(args)
-    elif args.command == "judge":
-        sys.exit(cmd_judge(args))
-    else:
-        parser.print_help()
-        sys.exit(1)
+    try:
+        if args.command == "ls":
+            cmd_list_models(args)
+        elif args.command == "run":
+            cmd_run_benchmark(args)
+        elif args.command == "interactive":
+            cmd_interactive(args)
+        elif args.command == "judge":
+            sys.exit(cmd_judge(args))
+        elif args.command == "leaderboard":
+            sys.exit(cmd_leaderboard(args))
+        else:
+            parser.print_help()
+            sys.exit(1)
+    except ConfigLoadError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(2)
 
 
 if __name__ == "__main__":

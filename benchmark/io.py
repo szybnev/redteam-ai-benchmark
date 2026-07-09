@@ -19,6 +19,15 @@ V2_DIFFICULTIES = {
     "L5 multi-step operator task",
 }
 
+V2_PROFILES = {"quick", "standard"}
+V2_METRICS = {"technical_accuracy", "completeness", "specificity"}
+V2_MANIFEST_FIELDS = {
+    "schema",
+    "dataset_id",
+    "dataset_version",
+    "benchmark_version",
+}
+
 V2_REQUIRED_FIELDS = {
     "id",
     "domain",
@@ -31,6 +40,7 @@ V2_REQUIRED_FIELDS = {
     "acceptable_variants",
     "tags",
     "weight",
+    "profiles",
 }
 
 
@@ -99,9 +109,11 @@ def _load_json_dataset(path: Path, filepath: str) -> BenchmarkDataset:
 
 
 def _load_jsonl_dataset(path: Path, filepath: str) -> BenchmarkDataset:
-    """Load a JSONL dataset with an optional first manifest record."""
+    """Load a JSONL dataset with a required first manifest record."""
     metadata: Dict[str, Any] = {}
     questions: List[Dict[str, Any]] = []
+    manifest_seen = False
+    record_number = 0
 
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -114,6 +126,7 @@ def _load_jsonl_dataset(path: Path, filepath: str) -> BenchmarkDataset:
         stripped = line.strip()
         if not stripped:
             continue
+        record_number += 1
         try:
             record = json.loads(stripped)
         except json.JSONDecodeError as e:
@@ -123,12 +136,25 @@ def _load_jsonl_dataset(path: Path, filepath: str) -> BenchmarkDataset:
 
         record_type = record.get("record_type", "question")
         if record_type == "manifest":
+            if manifest_seen:
+                raise QuestionLoadError(
+                    f"{filepath} line {line_number} contains a duplicate manifest"
+                )
+            if record_number != 1:
+                raise QuestionLoadError(
+                    f"{filepath} line {line_number} manifest must be the first record"
+                )
+            manifest_seen = True
             metadata = {
                 key: value
                 for key, value in record.items()
                 if key != "record_type"
             }
         elif record_type == "question":
+            if not manifest_seen:
+                raise QuestionLoadError(
+                    f"{filepath} line {line_number} question appears before manifest"
+                )
             questions.append(
                 _normalize_question({
                     key: value
@@ -171,12 +197,31 @@ def _validate_pattern_rule(rule: Dict[str, Any], q_id: Any, field_name: str) -> 
         raise QuestionLoadError(
             f"Q{q_id} {field_name}.{rule.get('id')} needs patterns"
         )
+    if not isinstance(rule.get("variants", []), list):
+        raise QuestionLoadError(
+            f"Q{q_id} {field_name}.{rule.get('id')} variants must be a list"
+        )
 
 
 def validate_v2_dataset(dataset: BenchmarkDataset) -> None:
     """Validate the rubric v2 dataset contract."""
     if dataset.metadata.get("schema") != "rubric-v2":
-        return
+        raise QuestionLoadError(
+            f'{dataset.path} manifest schema must be "rubric-v2"'
+        )
+
+    missing_manifest = sorted(V2_MANIFEST_FIELDS - set(dataset.metadata))
+    if missing_manifest:
+        raise QuestionLoadError(
+            f"{dataset.path} manifest missing required fields: "
+            f"{', '.join(missing_manifest)}"
+        )
+    for field_name in V2_MANIFEST_FIELDS:
+        value = dataset.metadata[field_name]
+        if not isinstance(value, str) or not value.strip():
+            raise QuestionLoadError(
+                f'{dataset.path} manifest field "{field_name}" must be a non-empty string'
+            )
 
     seen_ids = set()
     for question in dataset.questions:
@@ -203,15 +248,31 @@ def validate_v2_dataset(dataset: BenchmarkDataset) -> None:
             "fatal_errors",
             "acceptable_variants",
             "tags",
+            "profiles",
         ):
             _validate_list_field(question, field_name)
+
+        profiles = question["profiles"]
+        if not profiles:
+            raise QuestionLoadError(f"Q{q_id} profiles must not be empty")
+        unsupported_profiles = set(profiles) - V2_PROFILES
+        if unsupported_profiles:
+            raise QuestionLoadError(
+                f"Q{q_id} unsupported profiles: "
+                f"{', '.join(sorted(unsupported_profiles))}"
+            )
 
         if not question["rubric"]:
             raise QuestionLoadError(f"Q{q_id} rubric must not be empty")
 
         total_weight = 0.0
+        seen_rule_ids = set()
         for criterion in question["rubric"]:
             _validate_pattern_rule(criterion, q_id, "rubric")
+            rule_id = criterion["id"]
+            if rule_id in seen_rule_ids:
+                raise QuestionLoadError(f"Q{q_id} duplicate rule id: {rule_id}")
+            seen_rule_ids.add(rule_id)
             weight = criterion.get("weight", 1)
             if not isinstance(weight, (int, float)) or weight <= 0:
                 raise QuestionLoadError(
@@ -222,12 +283,21 @@ def validate_v2_dataset(dataset: BenchmarkDataset) -> None:
                 raise QuestionLoadError(
                     f"Q{q_id} rubric.{criterion.get('id')} match must be any or all"
                 )
+            metric = criterion.get("metric", "technical_accuracy")
+            if metric not in V2_METRICS:
+                raise QuestionLoadError(
+                    f"Q{q_id} rubric.{rule_id} unsupported metric: {metric}"
+                )
 
         if total_weight <= 0:
             raise QuestionLoadError(f"Q{q_id} rubric total weight must be > 0")
 
         for fatal in question["fatal_errors"]:
             _validate_pattern_rule(fatal, q_id, "fatal_errors")
+            rule_id = fatal["id"]
+            if rule_id in seen_rule_ids:
+                raise QuestionLoadError(f"Q{q_id} duplicate rule id: {rule_id}")
+            seen_rule_ids.add(rule_id)
             if fatal.get("match", "any") not in {"any", "all"}:
                 raise QuestionLoadError(
                     f"Q{q_id} fatal_errors.{fatal.get('id')} match must be any or all"

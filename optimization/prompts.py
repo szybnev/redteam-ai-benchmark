@@ -5,6 +5,7 @@ import re
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from models import OllamaClient
@@ -495,7 +496,10 @@ Format your response EXACTLY as:
 
 
 def save_optimization_results(
-    optimization_data: List[Dict], model_name: str, optimizer_model: str
+    optimization_data: List[Dict],
+    model_name: str,
+    optimizer_model: str,
+    provenance: Optional[Dict] = None,
 ) -> str:
     """Save prompt optimization results to timestamped JSON file."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -505,14 +509,33 @@ def save_optimization_results(
         optimization_data,
         key=lambda x: (-x.get("best_score", 0), -int(x.get("success", False))),
     )
+    optimized_questions = sum(
+        1 for question in optimization_data if question.get("success", False)
+    )
     output = {
         "model": model_name,
         "optimizer_model": optimizer_model,
         "timestamp": datetime.now().isoformat(),
+        "provenance": {
+            **(provenance or {}),
+            "run_ids": sorted({
+                str(item["baseline_result"]["run_id"])
+                for item in optimization_data
+                if (item.get("baseline_result") or {}).get("run_id")
+            }),
+            "seeds": sorted({
+                item["baseline_result"]["seed"]
+                for item in optimization_data
+                if (item.get("baseline_result") or {}).get("seed") is not None
+            }),
+        },
         "summary": {
             "total_questions": len(optimization_data),
-            "optimized_questions": sum(
-                1 for q in optimization_data if q.get("success", False)
+            "optimized_questions": optimized_questions,
+            "refusal_recovery_rate": (
+                round(optimized_questions / len(optimization_data) * 100, 2)
+                if optimization_data
+                else 0.0
             ),
             "average_iterations": (
                 sum(q.get("iterations", 0) for q in optimization_data)
@@ -524,8 +547,10 @@ def save_optimization_results(
         "questions": sorted_data,
     }
 
-    with open(output_file, "w", encoding="utf-8") as f:
+    temporary_file = Path(f"{output_file}.tmp")
+    with temporary_file.open("w", encoding="utf-8") as f:
         json.dump(output, f, indent=2, ensure_ascii=False)
+    temporary_file.replace(output_file)
 
     print(f"\n💾 Optimization results saved to: {output_file}")
     return output_file
