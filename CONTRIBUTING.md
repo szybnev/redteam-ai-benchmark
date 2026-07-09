@@ -14,8 +14,10 @@ Thanks for helping improve Red Team AI Benchmark. This project evaluates LLMs fo
 ```bash
 uv sync
 uv run run_benchmark.py --help
-uv run pytest
-python3 -m compileall -q run_benchmark.py benchmark models scoring utils
+uv lock --check
+uv run ruff check .
+uv run pytest -q
+uv run python -m compileall -q run_benchmark.py benchmark models optimization scoring tracing utils
 ```
 
 ## Pull Requests
@@ -37,8 +39,15 @@ New v2 questions belong in `datasets/v2/benchmark.jsonl` and must include:
 - `acceptable_variants`
 - `tags`
 - `weight`
+- `profiles` (`quick` and/or `standard`)
 
 Difficulty must be one of `L1 factual`, `L2 procedure`, `L3 troubleshooting`, `L4 scenario reasoning`, or `L5 multi-step operator task`.
+
+Each changed rubric criterion needs fixtures for a correct answer, paraphrase,
+negation, keyword stuffing, partial answer, and false claim. Each fatal pattern
+also needs a correct negation or quotation that must not trigger it. Dataset
+changes must include a profile coverage check and an explicit dataset-version
+decision.
 
 ## Issues
 

@@ -6,37 +6,44 @@ Red Team AI Benchmark — CLI-бенчмарк для выбора base LLM по
 
 Дефолтный v2 suite содержит 60 вопросов в `datasets/v2/benchmark.jsonl`, разбитых по доменам и сложности.
 
-## v2 Local Leaderboard
+## Публикация рейтинга
 
-Топ локальных моделей по июньскому прогону v2, отсортированный по `judge_adjusted_score`.
-Прогон использовал полный `standard` profile, Ollama, `max_tokens=4096`, `temperature=0.2`
-и post-hoc LLM-as-Judge только для disputed cases через OpenRouter `deepseek/deepseek-v4-flash`.
+В этой ветке нет актуального опубликованного рейтинга. Исторические результаты
+получены со старой лексической оценкой и частичной проверкой judge, поэтому их
+нельзя сравнивать с текущим scorer.
 
-| Место | Модель | Rubric | Judge-adjusted | Judge critical error rate |
-| --- | --- | ---: | ---: | ---: |
-| 1 | `hf.co/BugTraceAI/BugTraceAI-Apex-G4-26B-Q4:latest` | `80.89%` | `89.45%` | `0.00%` |
-| 2 | `nemotron-3-nano:30b` | `75.55%` | `86.81%` | `7.14%` |
-| 3 | `hf.co/yuxinlu1/gemma-4-12B-coder-fable5-composer2.5-v1-GGUF:Q6_K` | `73.23%` | `81.12%` | `7.14%` |
-| 4 | `hf.co/unsloth/Qwen3-Coder-Next-GGUF:Qwen3-Coder-Next-Q4_K_S` | `75.50%` | `80.15%` | `33.33%` |
-| 5 | `mistral-small3.2:24b` | `69.39%` | `76.58%` | `8.33%` |
+Для публикации нужен полный проход judge с совпадающими хешами датасета, без
+ошибок и с проверкой всех вопросов. Проверенные JSON- и Markdown-артефакты
+создаются командой:
 
-`judge_adjusted_score` — рекомендуемый audit score для этого лидерборда: deterministic
-rubric score, где disputed cases заменены оценкой LLM-as-Judge. При выборе base model
-важно смотреть не только итоговый score, но и critical-error rate.
+```bash
+uv run run_benchmark.py leaderboard \
+  --judge-summary judge_results_v2/summary.csv \
+  --output-dir leaderboard
+```
+
+Команда требует соседние judge records `per_model/*.json` и отклоняет
+`disputed` summary, неполное покрытие, несовпадающие хеши датасета и строки без
+сведений о judge model. Итоговый пакет содержит raw benchmark results,
+построчные judge records, их хеши и копию `summary.csv`.
+Порядок рейтинга определяется raw `rubric_score`; `judge_adjusted_score`
+показывается только как отдельный audit result.
 
 ## Что измеряет v2
 
 Бенчмарк сохраняет общий weighted score и отдельные audit-метрики:
 
-| Метрика | Значение |
-| --- | --- |
-| `refusal_rate` | Доля отказов или цензурированных ответов |
-| `technical_accuracy` | Средняя точность по техническим критериям rubric |
-| `critical_error_rate` | Доля ответов с fatal technical falsehood |
-| `completeness` | Покрытие обязательных шагов и условий |
-| `specificity` | Конкретность инструментов, полей, команд и evidence |
-| `hallucination_rate` | Сейчас совпадает с critical technical errors |
-| `latency_ms_avg` | Средняя latency ответа |
+| Метрика | Значение | Выборка / знаменатель |
+| --- | --- | --- |
+| `refusal_rate` | Доля отказов или цензурированных ответов | Завершённые ответы модели |
+| `lexical_coverage` | Покрытие шаблонов технических критериев | Завершённые ответы; отказы и fatal matches дают нулевой вклад |
+| `critical_error_rate` | Доля ответов, совпавших с неотвергнутыми fatal-error rules | Завершённые ответы модели |
+| `lexical_completeness` | Покрытие шаблонов полноты ответа | Завершённые ответы; отказы и fatal matches дают нулевой вклад |
+| `lexical_specificity` | Покрытие шаблонов конкретности ответа | Завершённые ответы; отказы и fatal matches дают нулевой вклад |
+| `latency_ms_avg` | Средняя latency ответа | Завершённые ответы с измеренной задержкой |
+| `metric_coverage` | Число наблюдений в каждой lexical aggregate | Завершённые ответы модели |
+| `run_coverage` | Число завершённых, неуспешных и пропущенных запросов | Ожидаемые пары вопрос-повтор |
+| `repeat_statistics` | Баллы повторов, стандартное отклонение и 95% bootstrap CI | Завершённые наблюдения, сгруппированные по повтору |
 
 Интерпретация intentionally conservative:
 
@@ -46,7 +53,11 @@ rubric score, где disputed cases заменены оценкой LLM-as-Judge
 | `60-79.9%` | `requires-validation` |
 | `>= 80%` | `strong-candidate` |
 
-Высокий score не является разрешением на production use. Перед выбором модели нужно смотреть breakdown по доменам, сложности, отказам и critical errors.
+Интерпретация применяется только к полному запуску. Любая ошибка запроса меняет
+ее на `incomplete`, сохраняя частичный балл и покрытие для диагностики. Высокий
+балл не является разрешением на использование в production. Если доверительный
+интервал повторов пересекает порог `60` или `80`, интерпретация меняется на
+`uncertain`.
 
 ## Покрытие датасета
 
@@ -133,15 +144,16 @@ uv run run_benchmark.py interactive ollama --profile standard
 
 | Profile | Назначение |
 | --- | --- |
-| `quick` | 16-question smoke subset |
+| `quick` | Smoke-проверка API и pipeline на 16 вопросах L1/L2; не замена рейтингу |
 | `standard` | Полный v2 benchmark на 60 вопросов |
-| `enterprise` | Полный v2 dataset с audit-friendly export |
-| `local-only` | Полный v2 dataset без LLM judge usage |
-| `cloud-comparison` | Полный v2 dataset для фиксированных cloud-model comparisons |
 
 ## Scoring
 
-Runtime scorer всегда `rubric`. Он deterministic и не требует внешней LLM-as-judge. Каждый v2 вопрос содержит атомарные criteria, fatal-error patterns, acceptable variants, tags и weight.
+Runtime scorer всегда `rubric`. Он детерминирован и не требует внешней
+LLM-as-Judge. Runtime score измеряет лексическое покрытие, а не доказывает
+техническую правильность ответа. Matcher учитывает явные отрицания и
+утверждения, помеченные как ложные, поддерживает допустимые варианты критерия и
+сохраняет совпавшие evidence.
 
 Legacy режимы `keyword`, `semantic` и `hybrid` для runtime scoring не поддерживаются. Для post-hoc LLM-as-Judge audit используйте отдельную команду `judge`.
 
@@ -155,11 +167,18 @@ OPENROUTER_API_KEY=... uv run run_benchmark.py judge \
   --dataset datasets/v2/benchmark.jsonl \
   --judge-model "deepseek/deepseek-v4-flash" \
   --output-dir judge_results_v2 \
-  --mode disputed \
+  --mode full \
   --concurrency 4
 ```
 
-Команда `judge` пишет `per_model/*.json`, `detailed.csv`, `summary.csv` и `disputed_cases.csv`. `judge_score` относится только к judged subset; для итогового сравнения используйте `judge_adjusted_score`, где rubric score заменён judge-оценкой на disputed cases. LLM-as-Judge остаётся audit layer и не перезаписывает deterministic benchmark results.
+Команда `judge` пишет `per_model/*.json`, `detailed.csv`, `summary.csv` и
+`disputed_cases.csv`. Режим `full` создает сопоставимый
+`judge_adjusted_score` и явные знаменатели метрик. `disputed` остается режимом
+экономичной диагностики и не публикует частично скорректированный общий балл. В
+него также входит одинаковая для всех моделей детерминированная выборка 20%
+question IDs с высокими баллами; доля задается через `--audit-sample-rate`.
+Judge сначала оценивает ответ без deterministic score, после чего результаты
+сравниваются на этапе обработки.
 
 ## Конфигурация
 
@@ -189,6 +208,9 @@ rate_limit_delay: 1.5
 max_tokens: 1024
 temperature: 0.2
 concurrency: 1
+repeats: 1
+seed: 0
+continue_on_error: true
 # request_log: ./results/requests.jsonl
 ```
 
@@ -208,19 +230,22 @@ JSON export содержит результаты модели, evidence по ru
   "scoring_method": "rubric",
   "total_score": 75.0,
   "interpretation": "requires-validation",
-  "benchmark_version": "2.1.0",
+  "benchmark_version": "2.3.0",
   "dataset_id": "redteam-ai-benchmark-v2",
-  "dataset_version": "2.0.0",
+  "dataset_version": "2.1.0",
   "dataset_hash": "...",
-  "scorer_version": "rubric",
+  "scorer_version": "rubric-v2.1.0",
   "config_hash": "...",
+  "evaluation_fingerprint": "...",
   "run_config": {
     "provider": "ollama",
     "model": "llama3.1:8b",
-    "profile": "standard"
+    "profile": "standard",
+    "repeats": 1,
+    "seed": 0
   },
   "git_commit": "...",
-  "package_version": "2.1.0",
+  "package_version": "2.3.0",
   "runtime_profile": "standard",
   "summary": {
     "metrics": {
@@ -236,11 +261,23 @@ JSON export содержит результаты модели, evidence по ru
 }
 ```
 
-CSV содержит строки по вопросам плюс строку `TOTAL`. `criteria_csv` добавляет отдельную строку на каждый passed или failed rubric criterion.
+Каждая строка результата содержит статус запроса, номер повтора, `run_id`, seed,
+причину завершения, usage, фактическую модель и доступные сведения provider.
+Верхний уровень provenance содержит сведения о среде и явную причину отсутствия
+immutable revision. CSV содержит строки по вопросам плюс строку `TOTAL`.
+`criteria_csv` добавляет строку на каждый пройденный или проваленный критерий.
+
+Ошибки запросов сохраняются как структурированные строки и меняют статус запуска
+на `incomplete`. Для остановки после первой ошибки используйте `--fail-fast` или
+`continue_on_error: false`.
 
 ## Prompt Optimization
 
-Prompt optimization остаётся отдельным optional режимом и не смешивается с base-model score. Он запускается только для baseline responses с оценкой `0%` при `--optimize-prompts` и пишет `optimized_prompts_{model}_{timestamp}.json`.
+Prompt optimization остается отдельным необязательным режимом и не меняет
+baseline score. Он запускается только для ответов, классифицированных как отказ,
+и пишет `optimized_prompts_{model}_{timestamp}.json` с раздельными baseline и
+optimized results. Summary sidecar-файла содержит `refusal_recovery_rate` по
+цензурированным ответам, отправленным optimizer.
 
 ```bash
 uv run run_benchmark.py run ollama -m "llama3.1:8b" \
@@ -250,6 +287,19 @@ uv run run_benchmark.py run ollama -m "llama3.1:8b" \
 
 Optimized score нельзя смешивать с base model capability comparison.
 
+## Известные ограничения
+
+- Детерминированная оценка измеряет лексическое покрытие rubric. Для утверждений
+  о технической точности нужен полный проход offline judge и ручная проверка.
+- Публичный датасет можно запомнить. Для критичных сравнений нужен закрытый или
+  регулярно обновляемый holdout.
+- Каждая текущая capability представлена одним уникальным вопросом. Повторы
+  измеряют вариативность генерации, но не заменяют несколько независимых
+  заданий; breakdown помечает такие оценки как `single-item` или
+  `single-item-repeated`.
+- Набор provider metadata различается. Отсутствующая immutable revision
+  отмечается как недоступная, а не выводится предположительно.
+
 ## Проверка
 
 Полезные проверки:
@@ -257,8 +307,10 @@ Optimized score нельзя смешивать с base model capability compari
 ```bash
 uv run run_benchmark.py --help
 uv run run_benchmark.py run --help
-uv run pytest
-python3 -m compileall -q run_benchmark.py benchmark models optimization scoring tracing utils
+uv lock --check
+uv run ruff check .
+uv run pytest -q
+uv run python -m compileall -q run_benchmark.py benchmark models optimization scoring tracing utils
 ```
 
 ## Участие

@@ -4,7 +4,7 @@ This file provides repository-specific guidance for AI coding agents. `CLAUDE.md
 
 ## Project
 
-Red Team AI Benchmark evaluates LLMs on authorized offensive-security tasks. Version 2 measures refusal behavior, rubric-based technical accuracy, critical errors, completeness, specificity, latency, and domain/difficulty breakdowns across 60 questions from `datasets/v2/benchmark.jsonl`.
+Red Team AI Benchmark evaluates LLMs on authorized offensive-security tasks. Version 2 measures refusal behavior, deterministic lexical rubric coverage, fatal-pattern errors, latency, request coverage, repeat stability, and domain/difficulty breakdowns across 60 questions from `datasets/v2/benchmark.jsonl`.
 
 Supported providers:
 
@@ -17,6 +17,7 @@ Primary implementation files:
 
 - `run_benchmark.py`: CLI, benchmark orchestration, prompt optimization, Langfuse tracing
 - `benchmark/`: dataset loading, runtime execution, metrics, shutdown handling, offline judge
+- `benchmark/leaderboard.py`: validated full-judge leaderboard artifact builder
 - `models/`: provider clients and `create_client()`
 - `optimization/`: prompt optimization helpers
 - `scoring/`: deterministic rubric scorer
@@ -40,7 +41,6 @@ Full background reference lives in `docs/agent-reference.md`. User-facing docs l
 - Use local source of truth first: code, configs, lockfiles, README, docs.
 - Use `uv` for Python commands unless a task explicitly requires another tool.
 - Do not run `git push` or `git pull` unless explicitly requested.
-- Commit messages must be short and written in English.
 - Group commits by meaning if the user asks for commits.
 - Do not write "Generated with Codex", "Generated with Claude", or similar attribution.
 
@@ -109,15 +109,17 @@ Useful checks:
 ```bash
 uv run run_benchmark.py --help
 uv run run_benchmark.py run --help
-uv run pytest
-python3 -m compileall -q run_benchmark.py benchmark models optimization scoring tracing utils
+uv lock --check
+uv run ruff check .
+uv run pytest -q
+uv run python -m compileall -q run_benchmark.py benchmark models optimization scoring tracing utils
 ```
 
 ## Architecture Notes
 
 Provider clients implement `APIClient`:
 
-- `query(prompt, max_tokens, retries, temperature) -> str`
+- `query(prompt, max_tokens, retries, temperature, seed) -> ProviderResponse`
 - `list_models() -> list[dict]`
 - `test_connection() -> bool`
 
@@ -126,7 +128,8 @@ Client creation is centralized in `models.create_client(provider, endpoint, mode
 Default scoring is rubric-based and deterministic:
 
 - v2 questions contain atomic rubric criteria, fatal-error patterns, acceptable variants, tags, and weights.
-- Refusals, critical errors, passed/failed criteria, evidence, and per-metric details are exported per question.
+- Runtime rubric metrics are lexical coverage signals, not semantic proof of technical accuracy.
+- Refusals, critical errors, passed/failed criteria, evidence, provider metadata, repeat identity, and request status are exported per question.
 - External LLM judge is available only through the offline `judge` command.
 
 Final interpretation:
@@ -142,8 +145,11 @@ When adding a question:
 1. Add a JSONL question object to `datasets/v2/benchmark.jsonl` with unique `id`.
 2. Include all required v2 fields: `domain`, `capability`, `difficulty`, `prompt`, `expected_artifacts`, `rubric`, `fatal_errors`, `acceptable_variants`, `tags`, and `weight`.
 3. Keep difficulty one of `L1 factual`, `L2 procedure`, `L3 troubleshooting`, `L4 scenario reasoning`, or `L5 multi-step operator task`.
-4. Add calibration or regression tests when scoring behavior changes.
-5. Update calibration or regression tests when scoring behavior changes.
+4. Assign `profiles`; supported values are `quick` and `standard`.
+5. Add positive, paraphrase, negation, keyword-stuffing, partial, and false-claim fixtures for affected criteria.
+6. For every fatal pattern, add a correct negation or quotation fixture that must not trigger it.
+7. Recalculate profile/domain/difficulty coverage and decide whether `dataset_version` must change.
+8. Run the complete validation stack, not only a targeted scorer test.
 
 When adding a provider:
 
@@ -161,13 +167,22 @@ When changing config:
 
 ## Optional Features
 
-Prompt optimization only triggers on baseline responses that score `0%`. It uses an optimizer model, tests reframed prompts against the target model, and writes `optimized_prompts_{model}_{timestamp}.json` when optimization results exist.
+Prompt optimization only triggers on baseline responses classified as censored. It never replaces baseline results or the main score. It writes separate baseline and optimized results to `optimized_prompts_{model}_{timestamp}.json`.
 
 Langfuse tracing is optional and configured through `config.yaml`. It records benchmark spans, question spans, optimization attempts, scores, payloads, and latency metadata.
 
 OpenRouter requires an API key through `--api-key`, config, or environment depending on the call path.
 
-The `local-only` profile must not require LLM judge access.
+The `quick` profile is an L1/L2 smoke test and must not be documented or used as a proxy for `standard` ranking.
+
+## Leaderboard Policy
+
+- Publish a leaderboard only from `judge --mode full` output with complete successful coverage, matching dataset hashes, and zero judge errors.
+- Generate `leaderboard.json` and `leaderboard.md` through the main `leaderboard` command; do not edit ranking rows manually.
+- Every published row must link to its raw result and per-question judge artifacts and identify the judge model.
+- Verify an update with `uv run run_benchmark.py leaderboard --judge-summary <judge-dir>/summary.csv --output-dir <publish-dir>`; do not copy aggregate rows by hand.
+- Use immutable model digest/revision when available. If unavailable, preserve the explicit provenance reason.
+- Keep `disputed` judge output diagnostic-only; it must not produce a partially adjusted leaderboard total.
 
 ## Documentation Policy
 

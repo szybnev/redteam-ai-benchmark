@@ -23,6 +23,7 @@ The first JSONL record is a manifest with `schema: rubric-v2`, `dataset_id`, `da
 - `acceptable_variants`
 - `tags`
 - `weight`
+- `profiles`
 
 Allowed difficulty values:
 
@@ -40,9 +41,9 @@ CLI profiles are defined in `run_benchmark.py`:
 
 - `quick`: quick v2 smoke subset selected by question `profiles`.
 - `standard`: default full v2 run.
-- `enterprise`: full v2 run with audit-friendly export.
-- `local-only`: full v2 run without LLM judge usage.
-- `cloud-comparison`: full v2 run for fixed hosted-model comparisons.
+
+`quick` contains only L1/L2 questions and is an API/pipeline smoke test, not a
+ranking proxy. `standard` is the only full benchmark profile.
 
 If adding a profile, update `PROFILE_DEFAULTS`, CLI docs, README files, and tests.
 
@@ -56,7 +57,10 @@ Default scorer:
 rubric
 ```
 
-`scoring/rubric_scorer.py` is deterministic and local. It checks each criterion pattern against the response, records passed and failed criteria, collects evidence, and applies fatal-error rules before normal scoring.
+`scoring/rubric_scorer.py` is deterministic and local. It checks non-rejected
+criterion patterns and explicit variants, records passed and failed criteria,
+collects evidence, and applies fatal-error rules. Its output metrics are lexical
+coverage signals, not semantic technical-accuracy claims.
 
 Do not add runtime scorer modes for keyword, semantic, hybrid, or online LLM judging. LLM-as-Judge belongs only in the offline `judge` command.
 
@@ -67,10 +71,22 @@ The request log is an optional JSONL side artifact selected with `--request-log`
 Post-hoc judging is exposed through the main CLI:
 
 ```bash
-uv run run_benchmark.py judge --results "results_*_v2/*.json" --mode disputed
+uv run run_benchmark.py judge --results "results_*_v2/*.json" --mode full
 ```
 
-The implementation lives in `benchmark/offline_judge.py`; do not add a separate script entrypoint. It reads saved v2 result JSON files, does not rerun benchmark models, and writes sidecar audit artifacts under the configured output directory. Treat `judge_score` as the judged subset score and `judge_adjusted_score` as the comparison-friendly adjusted result.
+The implementation lives in `benchmark/offline_judge.py`; do not add a separate
+script entrypoint. It reads saved v2 result JSON files, does not rerun benchmark
+models, and writes sidecar audit artifacts under the configured output directory.
+Only full mode produces `judge_adjusted_score`; disputed mode is diagnostic and
+adds a deterministic high-score audit sample. Judge input is blind to the
+deterministic score, and aggregation restores weights from the hash-checked
+dataset.
+
+Publish leaderboard artifacts through the main `leaderboard` command. It
+requires complete `summary.csv` and sibling `per_model/*.json` records, then
+packages raw results, per-question judgements, hashes, and generated JSON and
+Markdown tables. Rows are ranked by raw rubric score; judge-adjusted score is an
+audit field. Do not publish from a disputed or incomplete judge run.
 
 `ScoringResult` now carries:
 
@@ -94,8 +110,14 @@ The implementation lives in `benchmark/offline_judge.py`; do not add a separate 
 The benchmark exports:
 
 - weighted total score
-- metrics such as refusal and critical-error rate
-- breakdowns by difficulty, domain, and capability
+- lexical coverage, refusal, critical-error, latency, and request coverage
+- repeat mean, standard deviation, and bootstrap confidence interval
+- breakdowns by difficulty, domain, and capability, including whether an
+  estimate is single-item or multi-item
+
+Transport failures are structured result rows but are excluded from the scored
+denominator. They make the run interpretation `incomplete`. A repeat confidence
+interval crossing `60` or `80` makes the interpretation `uncertain`.
 
 High scores are labeled `strong-candidate`, not `production-ready`.
 
@@ -111,7 +133,10 @@ JSON exports include top-level audit provenance:
 - `dataset_hash`
 - `scorer_version`
 - `config_hash`
+- `evaluation_fingerprint`
 - `run_config`
+- `environment`
+- `provider_metadata`
 - `git_commit`
 - `package_version`
 - `runtime_profile`
@@ -127,14 +152,20 @@ When adding a question:
 3. Use one allowed difficulty string.
 4. Keep `rubric` non-empty and criteria weights positive.
 5. Include fatal-error rules for common dangerous false claims.
-6. Add or update calibration fixtures when scorer behavior changes.
-7. Run `uv run pytest` and `python3 -m compileall -q run_benchmark.py benchmark models optimization scoring tracing utils`.
+6. Add positive, paraphrase, negation, keyword-stuffing, partial, and false-claim
+   fixtures for changed criteria; add a non-triggering negation/quotation for
+   every changed fatal pattern.
+7. Recalculate profile coverage and make an explicit dataset-version decision.
+8. Run `uv run pytest -q` and `uv run python -m compileall -q run_benchmark.py benchmark models optimization scoring tracing utils`.
 
 Do not add large batches of questions without rubric criteria.
 
 ## Optional Features
 
-Prompt optimization remains separate from base-model scoring. It runs only after a baseline response scores `0%`; do not mix optimized results into base model comparison tables.
+Prompt optimization remains separate from base-model scoring. It runs only when
+the baseline response is classified as censored, preserves the baseline result
+and total, and writes optimized attempts separately. Do not mix optimized
+results into base-model comparison tables.
 
 Langfuse tracing is optional and should not be required for local or CI validation.
 

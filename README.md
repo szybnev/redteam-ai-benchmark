@@ -8,37 +8,44 @@ The default v2 suite contains 60 questions in `datasets/v2/benchmark.jsonl`, gro
 
 <img width="1393" height="1126" alt="image" src="https://github.com/user-attachments/assets/3f8310e2-f207-48d1-9b2b-a65cc5418cf8" />
 
-## v2 Local Leaderboard
+## Published Leaderboard
 
-Top local models from the June 2026 v2 run, sorted by `judge_adjusted_score`.
-The run used the full `standard` profile, Ollama, `max_tokens=4096`, `temperature=0.2`,
-and post-hoc disputed-case LLM-as-Judge via OpenRouter `deepseek/deepseek-v4-flash`.
+No current leaderboard is published in this branch. Historical scores were
+produced with older lexical and partial-judge semantics and are not comparable
+to the current scorer.
 
-| Rank | Model | Rubric | Judge-adjusted | Judge critical error rate |
-| --- | --- | ---: | ---: | ---: |
-| 1 | `hf.co/BugTraceAI/BugTraceAI-Apex-G4-26B-Q4:latest` | `80.89%` | `89.45%` | `0.00%` |
-| 2 | `nemotron-3-nano:30b` | `75.55%` | `86.81%` | `7.14%` |
-| 3 | `hf.co/yuxinlu1/gemma-4-12B-coder-fable5-composer2.5-v1-GGUF:Q6_K` | `73.23%` | `81.12%` | `7.14%` |
-| 4 | `hf.co/unsloth/Qwen3-Coder-Next-GGUF:Qwen3-Coder-Next-Q4_K_S` | `75.50%` | `80.15%` | `33.33%` |
-| 5 | `mistral-small3.2:24b` | `69.39%` | `76.58%` | `8.33%` |
+A publishable leaderboard requires a full judge pass with matching dataset
+hashes, zero judge errors, and complete coverage. Generate its checked JSON and
+Markdown artifacts with:
 
-`judge_adjusted_score` is the recommended audit score for this leaderboard: the
-deterministic rubric score with judged disputed cases replaced by the LLM-as-Judge
-score. Keep the critical-error rate in view when choosing a base model.
+```bash
+uv run run_benchmark.py leaderboard \
+  --judge-summary judge_results_v2/summary.csv \
+  --output-dir leaderboard
+```
+
+The command requires the sibling `per_model/*.json` judge records and rejects
+`disputed` summaries, incomplete judge coverage, dataset hash mismatches, and
+rows without judge-model provenance. The resulting pack contains raw benchmark
+results, per-question judge records, their hashes, and a copy of `summary.csv`.
+Ranking uses raw `rubric_score`; `judge_adjusted_score` is displayed only as a
+separate audit result.
 
 ## What v2 Measures
 
 The benchmark reports the total weighted score and separate audit metrics:
 
-| Metric | Meaning |
-| --- | --- |
-| `refusal_rate` | Percentage of refused or censored answers |
-| `technical_accuracy` | Average rubric accuracy for technical criteria |
-| `critical_error_rate` | Answers with fatal technical falsehoods |
-| `completeness` | Coverage of required steps and conditions |
-| `specificity` | Presence of concrete tools, fields, commands, or evidence |
-| `hallucination_rate` | Currently tied to critical technical errors |
-| `latency_ms_avg` | Average response latency |
+| Metric | Meaning | Population / denominator |
+| --- | --- | --- |
+| `refusal_rate` | Percentage of refused or censored answers | Completed model responses |
+| `lexical_coverage` | Coverage of technical criterion patterns | Completed responses; refusals and fatal matches contribute zero |
+| `critical_error_rate` | Answers matching non-rejected fatal-error rules | Completed model responses |
+| `lexical_completeness` | Coverage of completeness criterion patterns | Completed responses; refusals and fatal matches contribute zero |
+| `lexical_specificity` | Coverage of specificity criterion patterns | Completed responses; refusals and fatal matches contribute zero |
+| `latency_ms_avg` | Average response latency | Completed responses with measured latency |
+| `metric_coverage` | Observations contributing to each lexical aggregate | Completed model responses |
+| `run_coverage` | Completed, failed, and skipped model requests | Expected question-repeat observations |
+| `repeat_statistics` | Per-repeat scores, standard deviation, and 95% bootstrap CI | Completed observations grouped by repeat |
 
 Interpretation labels are deliberately conservative:
 
@@ -48,7 +55,11 @@ Interpretation labels are deliberately conservative:
 | `60-79.9%` | `requires-validation` |
 | `>= 80%` | `strong-candidate` |
 
-A high score is not a production approval. Review domain, difficulty, refusal, and critical-error breakdowns before selecting a model.
+Interpretation labels apply only to complete runs. Any request failure changes
+the interpretation to `incomplete`, while preserving the partial score and
+coverage for diagnostics. When repeat confidence intervals cross the `60` or
+`80` threshold, the interpretation is `uncertain`. A high score is not a
+production approval.
 
 ## Dataset Coverage
 
@@ -135,15 +146,16 @@ Supported profiles:
 
 | Profile | Purpose |
 | --- | --- |
-| `quick` | 16-question smoke subset |
+| `quick` | 16-question L1/L2 API and pipeline smoke subset; not a ranking proxy |
 | `standard` | Full 60-question v2 benchmark |
-| `enterprise` | Full v2 dataset with audit-friendly export |
-| `local-only` | Full v2 dataset without LLM judge usage |
-| `cloud-comparison` | Full v2 dataset for fixed cloud-model comparisons |
 
 ## Scoring
 
-Runtime scoring is always `rubric`. It is deterministic and does not require an external LLM judge. Each v2 question contains atomic criteria, fatal-error patterns, acceptable variants, tags, and a question weight.
+Runtime scoring is always `rubric`. It is deterministic and does not require an
+external LLM judge. The runtime score is lexical coverage, not a semantic proof
+of technical correctness. The matcher rejects explicit negations and statements
+marked false, supports criterion-level accepted variants, and records matched
+evidence for audit.
 
 Runtime scoring does not support legacy `keyword`, `semantic`, or `hybrid` modes. Use the offline `judge` command for post-hoc LLM-as-Judge auditing.
 
@@ -157,11 +169,17 @@ OPENROUTER_API_KEY=... uv run run_benchmark.py judge \
   --dataset datasets/v2/benchmark.jsonl \
   --judge-model "deepseek/deepseek-v4-flash" \
   --output-dir judge_results_v2 \
-  --mode disputed \
+  --mode full \
   --concurrency 4
 ```
 
-The judge command writes `per_model/*.json`, `detailed.csv`, `summary.csv`, and `disputed_cases.csv`. `judge_score` is the judged subset score; use `judge_adjusted_score` for the rubric score with judged disputed cases replaced. LLM-as-Judge output is an audit layer and does not overwrite deterministic benchmark results.
+The judge command writes `per_model/*.json`, `detailed.csv`, `summary.csv`, and
+`disputed_cases.csv`. Full mode produces a comparable `judge_adjusted_score` and
+explicit denominators. `disputed` remains a cost-saving diagnostic mode and does
+not publish a partially adjusted total. It also audits a deterministic 20% sample
+of high-score question IDs across every model; adjust this with
+`--audit-sample-rate`. The judge evaluates answers without seeing the
+deterministic score, then post-processing compares both results.
 
 ## Configuration
 
@@ -191,6 +209,9 @@ rate_limit_delay: 1.5
 max_tokens: 1024
 temperature: 0.2
 concurrency: 1
+repeats: 1
+seed: 0
+continue_on_error: true
 # request_log: ./results/requests.jsonl
 ```
 
@@ -210,19 +231,22 @@ JSON export includes model results, per-question rubric evidence, aggregate summ
   "scoring_method": "rubric",
   "total_score": 75.0,
   "interpretation": "requires-validation",
-  "benchmark_version": "2.1.0",
+  "benchmark_version": "2.3.0",
   "dataset_id": "redteam-ai-benchmark-v2",
-  "dataset_version": "2.0.0",
+  "dataset_version": "2.1.0",
   "dataset_hash": "...",
-  "scorer_version": "rubric",
+  "scorer_version": "rubric-v2.1.0",
   "config_hash": "...",
+  "evaluation_fingerprint": "...",
   "run_config": {
     "provider": "ollama",
     "model": "llama3.1:8b",
-    "profile": "standard"
+    "profile": "standard",
+    "repeats": 1,
+    "seed": 0
   },
   "git_commit": "...",
-  "package_version": "2.1.0",
+  "package_version": "2.3.0",
   "runtime_profile": "standard",
   "summary": {
     "metrics": {
@@ -238,11 +262,23 @@ JSON export includes model results, per-question rubric evidence, aggregate summ
 }
 ```
 
-CSV output contains per-question rows plus a `TOTAL` row. `criteria_csv` adds one row per passed or failed rubric criterion.
+Each result row includes request status, repeat/run identity, seed, finish reason,
+usage, actual model, and available provider metadata. Top-level provenance adds
+environment information and an explicit reason when an immutable model revision
+is unavailable. CSV output contains per-question rows plus a `TOTAL` row.
+`criteria_csv` adds one row per passed or failed rubric criterion.
+
+Request errors are preserved as structured rows and make the run `incomplete`.
+Use `--fail-fast` or `continue_on_error: false` to abort on the first error.
 
 ## Prompt Optimization
 
-Prompt optimization remains optional and separate from base-model scoring. It only runs for baseline responses that score `0%` when `--optimize-prompts` is enabled, and it writes `optimized_prompts_{model}_{timestamp}.json`.
+Prompt optimization remains optional and separate from base-model scoring. It
+only runs for responses classified as censored. Baseline responses and the main
+score are never replaced; optimized responses are written to
+`optimized_prompts_{model}_{timestamp}.json` with separate baseline and optimized
+results. Its summary reports `refusal_recovery_rate` over the censored responses
+sent to the optimizer.
 
 ```bash
 uv run run_benchmark.py run ollama -m "llama3.1:8b" \
@@ -252,6 +288,18 @@ uv run run_benchmark.py run ollama -m "llama3.1:8b" \
 
 Do not mix optimized scores with base model capability comparisons.
 
+## Known Limitations
+
+- Deterministic scoring measures lexical rubric coverage. Use a full offline
+  judge pass and manual review for technical-accuracy claims.
+- The public dataset can be memorized. Treat it as a development benchmark;
+  high-stakes evaluation should add a private or rotating holdout.
+- Each current capability has one unique question. Repeats measure generation
+  variance, not multi-item capability validity; breakdowns expose this as
+  `single-item` or `single-item-repeated`.
+- Provider metadata differs. Missing immutable revisions are recorded as
+  unavailable rather than inferred.
+
 ## Validation
 
 Useful checks:
@@ -259,8 +307,10 @@ Useful checks:
 ```bash
 uv run run_benchmark.py --help
 uv run run_benchmark.py run --help
-uv run pytest
-python3 -m compileall -q run_benchmark.py benchmark models optimization scoring tracing utils
+uv lock --check
+uv run ruff check .
+uv run pytest -q
+uv run python -m compileall -q run_benchmark.py benchmark models optimization scoring tracing utils
 ```
 
 ## Contributing
