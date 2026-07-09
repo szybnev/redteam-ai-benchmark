@@ -6,6 +6,8 @@ Red Team AI Benchmark is a CLI benchmark for choosing base LLMs for authorized r
 
 The default v2 suite contains 60 questions in `datasets/v2/benchmark.jsonl`, grouped by domain and difficulty.
 
+<img width="1393" height="1126" alt="image" src="https://github.com/user-attachments/assets/3f8310e2-f207-48d1-9b2b-a65cc5418cf8" />
+
 ## v2 Local Leaderboard
 
 Top local models from the June 2026 v2 run, sorted by `judge_adjusted_score`.
