@@ -391,3 +391,5 @@ config.yaml
 
 .agents/
 skills-lock.json
+twitter/
+BUGS.md
