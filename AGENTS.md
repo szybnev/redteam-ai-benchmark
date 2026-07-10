@@ -4,7 +4,9 @@ This file provides repository-specific guidance for AI coding agents. `CLAUDE.md
 
 ## Project
 
-Red Team AI Benchmark evaluates LLMs on authorized offensive-security tasks. Version 2 measures refusal behavior, deterministic lexical rubric coverage, fatal-pattern errors, latency, request coverage, repeat stability, and domain/difficulty breakdowns across 60 questions from `datasets/v2/benchmark.jsonl`.
+Red Team AI Benchmark is an LLM evaluation benchmark. It measures how models understand and respond to red-team questions and security scenarios; it does not perform offensive-security actions. Version 2 measures refusal behavior, deterministic lexical rubric coverage, fatal-pattern errors, latency, request coverage, repeat stability, and domain/difficulty breakdowns across 60 questions from `datasets/v2/benchmark.jsonl`.
+
+Scope boundary: requests are sent to configured LLM provider endpoints and optional judge/tracing services. The benchmark has no target-system access, does not execute model output, and does not provide exploitation, scanning, persistence, payload, C2, or autonomous-agent capabilities. Any downstream action depends solely on the end user, their framework, permissions, and environment.
 
 Supported providers:
 

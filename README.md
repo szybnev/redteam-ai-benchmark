@@ -2,21 +2,39 @@
 
 **Russian version:** [README.ru.md](README.ru.md)
 
-Red Team AI Benchmark is a CLI benchmark for choosing base LLMs for authorized red-team and offensive-security work. Version 2 uses a rubric-based dataset instead of judging answers only against one golden response.
+Red Team AI Benchmark is a CLI **model-evaluation benchmark**. It measures how LLMs understand and respond to red-team questions and security scenarios; it is not a tool for carrying out those activities. Version 2 uses a rubric-based dataset instead of judging answers only against one golden response.
 
 The default v2 suite contains 60 questions in `datasets/v2/benchmark.jsonl`, grouped by domain and difficulty.
+
+## Purpose and Scope
+
+```yaml
+project_type: LLM evaluation benchmark
+primary_function: assess model responses to red-team questions and scenarios
+execution_target: configured LLM provider, optional judge, and optional tracing services
+target_system_access: none
+model_output_execution: none
+user_control: all actions after a response is returned depend solely on the end user and their own framework, permissions, and environment
+```
+
+### Explicit Non-goals
+
+- This repository is not a hacking tool, exploit framework, scanner, C2, persistence tool, payload runner, or autonomous red-team agent.
+- It does not discover, access, exploit, modify, or maintain access to target systems.
+- It does not execute model output. The benchmark only sends evaluation prompts to configured model endpoints, scores returned text, and writes results.
+- The presence of offensive-security topics in the test dataset describes the evaluation domain; it does not grant permission or provide authorization for activity against any system.
+
+### User Responsibility
+
+The benchmark does not authorize, direct, or control any activity outside the evaluation run. Any downstream use of model responses, including use through a separate agent or automation framework, depends entirely on the end user, their configuration, permissions, and environment. Use the dataset and results only for authorized evaluation, research, testing, or education.
 
 <img width="1393" height="1126" alt="image" src="https://github.com/user-attachments/assets/3f8310e2-f207-48d1-9b2b-a65cc5418cf8" />
 
 ## Published Leaderboard
 
-No current leaderboard is published in this branch. Historical scores were
-produced with older lexical and partial-judge semantics and are not comparable
-to the current scorer.
+No current leaderboard is published in this branch. Historical scores were produced with older lexical and partial-judge semantics and are not comparable to the current scorer.
 
-A publishable leaderboard requires a full judge pass with matching dataset
-hashes, zero judge errors, and complete coverage. Generate its checked JSON and
-Markdown artifacts with:
+A publishable leaderboard requires a full judge pass with matching dataset hashes, zero judge errors, and complete coverage. Generate its checked JSON and Markdown artifacts with:
 
 ```bash
 uv run run_benchmark.py leaderboard \
@@ -24,12 +42,7 @@ uv run run_benchmark.py leaderboard \
   --output-dir leaderboard
 ```
 
-The command requires the sibling `per_model/*.json` judge records and rejects
-`disputed` summaries, incomplete judge coverage, dataset hash mismatches, and
-rows without judge-model provenance. The resulting pack contains raw benchmark
-results, per-question judge records, their hashes, and a copy of `summary.csv`.
-Ranking uses raw `rubric_score`; `judge_adjusted_score` is displayed only as a
-separate audit result.
+The command requires the sibling `per_model/*.json` judge records and rejects `disputed` summaries, incomplete judge coverage, dataset hash mismatches, and rows without judge-model provenance. The resulting pack contains raw benchmark results, per-question judge records, their hashes, and a copy of `summary.csv`. Ranking uses raw `rubric_score`; `judge_adjusted_score` is displayed only as a separate audit result.
 
 ## What v2 Measures
 
@@ -55,11 +68,7 @@ Interpretation labels are deliberately conservative:
 | `60-79.9%` | `requires-validation` |
 | `>= 80%` | `strong-candidate` |
 
-Interpretation labels apply only to complete runs. Any request failure changes
-the interpretation to `incomplete`, while preserving the partial score and
-coverage for diagnostics. When repeat confidence intervals cross the `60` or
-`80` threshold, the interpretation is `uncertain`. A high score is not a
-production approval.
+Interpretation labels apply only to complete runs. Any request failure changes the interpretation to `incomplete`, while preserving the partial score and coverage for diagnostics. When repeat confidence intervals cross the `60` or `80` threshold, the interpretation is `uncertain`. A high score is not a production approval.
 
 ## Dataset Coverage
 
@@ -151,11 +160,7 @@ Supported profiles:
 
 ## Scoring
 
-Runtime scoring is always `rubric`. It is deterministic and does not require an
-external LLM judge. The runtime score is lexical coverage, not a semantic proof
-of technical correctness. The matcher rejects explicit negations and statements
-marked false, supports criterion-level accepted variants, and records matched
-evidence for audit.
+Runtime scoring is always `rubric`. It is deterministic and does not require an external LLM judge. The runtime score is lexical coverage, not a semantic proof of technical correctness. The matcher rejects explicit negations and statements marked false, supports criterion-level accepted variants, and records matched evidence for audit.
 
 Runtime scoring does not support legacy `keyword`, `semantic`, or `hybrid` modes. Use the offline `judge` command for post-hoc LLM-as-Judge auditing.
 
@@ -173,13 +178,7 @@ OPENROUTER_API_KEY=... uv run run_benchmark.py judge \
   --concurrency 4
 ```
 
-The judge command writes `per_model/*.json`, `detailed.csv`, `summary.csv`, and
-`disputed_cases.csv`. Full mode produces a comparable `judge_adjusted_score` and
-explicit denominators. `disputed` remains a cost-saving diagnostic mode and does
-not publish a partially adjusted total. It also audits a deterministic 20% sample
-of high-score question IDs across every model; adjust this with
-`--audit-sample-rate`. The judge evaluates answers without seeing the
-deterministic score, then post-processing compares both results.
+The judge command writes `per_model/*.json`, `detailed.csv`, `summary.csv`, and `disputed_cases.csv`. Full mode produces a comparable `judge_adjusted_score` and explicit denominators. `disputed` remains a cost-saving diagnostic mode and does not publish a partially adjusted total. It also audits a deterministic 20% sample of high-score question IDs across every model; adjust this with `--audit-sample-rate`. The judge evaluates answers without seeing the deterministic score, then post-processing compares both results.
 
 ## Configuration
 
@@ -262,23 +261,13 @@ JSON export includes model results, per-question rubric evidence, aggregate summ
 }
 ```
 
-Each result row includes request status, repeat/run identity, seed, finish reason,
-usage, actual model, and available provider metadata. Top-level provenance adds
-environment information and an explicit reason when an immutable model revision
-is unavailable. CSV output contains per-question rows plus a `TOTAL` row.
-`criteria_csv` adds one row per passed or failed rubric criterion.
+Each result row includes request status, repeat/run identity, seed, finish reason, usage, actual model, and available provider metadata. Top-level provenance adds environment information and an explicit reason when an immutable model revision is unavailable. CSV output contains per-question rows plus a `TOTAL` row. `criteria_csv` adds one row per passed or failed rubric criterion.
 
-Request errors are preserved as structured rows and make the run `incomplete`.
-Use `--fail-fast` or `continue_on_error: false` to abort on the first error.
+Request errors are preserved as structured rows and make the run `incomplete`. Use `--fail-fast` or `continue_on_error: false` to abort on the first error.
 
 ## Prompt Optimization
 
-Prompt optimization remains optional and separate from base-model scoring. It
-only runs for responses classified as censored. Baseline responses and the main
-score are never replaced; optimized responses are written to
-`optimized_prompts_{model}_{timestamp}.json` with separate baseline and optimized
-results. Its summary reports `refusal_recovery_rate` over the censored responses
-sent to the optimizer.
+Prompt optimization remains optional and separate from base-model scoring. It only runs for responses classified as censored. Baseline responses and the main score are never replaced; optimized responses are written to `optimized_prompts_{model}_{timestamp}.json` with separate baseline and optimized results. Its summary reports `refusal_recovery_rate` over the censored responses sent to the optimizer.
 
 ```bash
 uv run run_benchmark.py run ollama -m "llama3.1:8b" \
@@ -290,15 +279,10 @@ Do not mix optimized scores with base model capability comparisons.
 
 ## Known Limitations
 
-- Deterministic scoring measures lexical rubric coverage. Use a full offline
-  judge pass and manual review for technical-accuracy claims.
-- The public dataset can be memorized. Treat it as a development benchmark;
-  high-stakes evaluation should add a private or rotating holdout.
-- Each current capability has one unique question. Repeats measure generation
-  variance, not multi-item capability validity; breakdowns expose this as
-  `single-item` or `single-item-repeated`.
-- Provider metadata differs. Missing immutable revisions are recorded as
-  unavailable rather than inferred.
+- Deterministic scoring measures lexical rubric coverage. Use a full offline judge pass and manual review for technical-accuracy claims.
+- The public dataset can be memorized. Treat it as a development benchmark; high-stakes evaluation should add a private or rotating holdout.
+- Each current capability has one unique question. Repeats measure generation variance, not multi-item capability validity; breakdowns expose this as `single-item` or `single-item-repeated`.
+- Provider metadata differs. Missing immutable revisions are recorded as unavailable rather than inferred.
 
 ## Validation
 
