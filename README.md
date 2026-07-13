@@ -6,6 +6,10 @@ Red Team AI Benchmark is a CLI **model-evaluation benchmark**. It measures how L
 
 The default v2 suite contains 60 questions in `datasets/v2/benchmark.jsonl`, grouped by domain and difficulty.
 
+## Repository Status
+
+The original GitHub repository is no longer available because its owner was banned from GitHub. The original author's alternative repository is available at [gitlab.com/toxy4ny/redteam-ai-benchmark](https://gitlab.com/toxy4ny/redteam-ai-benchmark). The current repository owner is the active developer and maintainer.
+
 ## Purpose and Scope
 
 ```yaml
